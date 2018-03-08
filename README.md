@@ -13,13 +13,18 @@ to allow for future ciphers to be added
 
 *As I am not a cryptography expert, you have no reason to trust this, but it should deter casual snooping.*
 
+Not that it isn't *intended* to be fairly secure. It doesn't provide perfect forward secrecy or anything like that, but in theory nobody should be able
+to read your messages, make fake ones, or do replay attacks.
+
 ## Client-Server model
 
 Pavillion uses a traditional client-server model, except that clients and servers may share a port. Only a client can initiate a request, and
 only a server may respond to or act on a request. This includes reliable and unreliable multicasting modes.
 
 Every client has a 16-byte client ID which may be freely and arbitrarily chosen as a username might be. Clients using security
-also have a 32 byte Preshared Key. 
+also have a 32 byte Preshared Key. This has to be a full-strength random key, because the protocol exposes it to offline attacks.
+
+This should not be an issue in the intended use cases.
 
 ## Ports
 
@@ -28,4 +33,4 @@ General multicast application traffic belongs on port 1783 on multicast group 23
 
 ## What's working so far
 
-At the moment, we have secur
+At the moment, we have secure reliable multicasting and that's about it
