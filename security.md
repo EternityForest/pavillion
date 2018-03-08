@@ -34,7 +34,8 @@ This protocol does not intend to provide forward secrecy. A session key compromi
 ### PSK Nonce Request(Client to server, Security opcode 1)
 When a client wants to send a message to a server, it first sends a Nonce Request, which is simply
 a message with counter 0 followed by a single 1 byte as the opcode, then the client's 1 byte cipher number,then a 16 byte challenge,
-then the client's 16 byte Client ID. Servers recieving this should reply with a PSK Nonce.
+then the client's 16 byte Client ID. Servers recieving this should reply with a PSK Nonce if the cipher number specifies PSK encryption,
+or with an ECC Nonce otherwise.
 
 `CipherNumber[1], ClientChallenge[16],ClientID[16]`
 
@@ -105,13 +106,19 @@ After a certain number of failures, exponential backoff should be used.
 ## Asymmetric setup process
 
 
-### 12: ECC Client Info
+### 11: ECC Nonce (S>C)
+An ECC Nonce message serves the role of a standard nonce message, but contains only the 32 byte server nonce followed by the 16 byte
+client challenge. The entire data contents are encrypted using the client selected cipher's specified asymetric encryption. Because the counter is 0,
+a random 24 byte nonce is selected and prepended to the encrypted data.
+
+### 12: ECC Client Info (C>S)
 Upon receiving a Nonce message with a correct challenge, a client wishing to use ECC  must send an ECC client info message with opcode 12 instead of a standard client info message.
 
-This message contains an encrypted message to the server's public key, that contains the server's challenge followed by a 32 byte key that the client will use to send messages to the server.
+An ECC client info has a counter value of 0, followed by a 12 byte, followed by the one byte cipher number.
 
+This is followed by a signed and encrypted message containing the 16 byte client ID, the 32 byte server nonce(As a challenge response), followed by the 32 byte key that will be used to send messages TO the server, followed by the key that will be used to send messages to the client, followed by the 8 byte current client counter.
 
-An ECC client info has a counter value of 0, followed by a 6 byte, followed by a signed message containing the 32 byte server nonce(As a challenge response), followed by the 32 byte key that will be used to send messages TO the server, followed by the key that will be used to send messages to the client, followed by the 8 byte current client counter.
+Because the counter is 0, a random 24 byte nonce is selected and prepended to the encrypted data.
 
 Asymetric setup Errors will be resolved my resending nonce requests or nonces as appropriate to restart the handshake process.
 
@@ -126,8 +133,12 @@ a message with a zero counter followed by 5 shall by considered the "Unknown mes
 A cipher suite must define a keyed hash, and an encryption/decryption function. They may also define
 
 
-1: Libnacl
-Pad little endian counters with 0s for the encryption nonce. ChaCha20, blake2b, and ECC are used.
+### 1: libnacl
+Pad little endian counters with 0s for the encryption nonce. ChaCha20 encryption, blake2b keyed hash
+
+
+### 2: libnacl_pubkey
+Same as libnacl, but specifies that ECC key setup should be used
 
 ## Discovery
 

@@ -43,7 +43,7 @@ class ExpectedAckCounter():
 
 
 class _Client():
-    def __init__(self, address=('255.255.255.255',DEFAULT_PORT),clientID=None,psk=None,cipher=1,server=None,handle=None):
+    def __init__(self, address=('255.255.255.255',DEFAULT_PORT),clientID=None,psk=None,cipher=1,server=None,keypair=None, serverkey=None, handle=None):
         "Represents a Pavillion client that can both initiate and respond to requests"
         #The address of our associated server
         self.server_address = address
@@ -54,6 +54,9 @@ class _Client():
         self.server_counter = 0
 
         self.cipher= ciphers[cipher]
+
+        self.keypair = keypair
+        self.server_pubkey = serverkey
 
         #Clients can be associated with a server
         self.server = server
@@ -68,8 +71,13 @@ class _Client():
 
         if self.psk:
             self.key = self.cipher.keyedhash(self.nonce,psk)
+        
+        elif  self.keypair:
+            self.key = os.urandom(32)
         else:
             self.key= None
+
+        
 
         self_address = ('', 0)
 
@@ -127,6 +135,9 @@ class _Client():
 
         if self.psk and self.clientID:
             self.sendSetup(0, 1, struct.pack("<B",self.cipher.id)+self.clientID+self.challenge)
+        elif self.keypair:
+            self.sendSetup(0, 1, struct.pack("<B",self.cipher.id)+self.clientID+self.challenge)
+
         else:
             self.synced = False
             counter = 8
@@ -142,7 +153,7 @@ class _Client():
         self.running = False
 
     def send(self, counter, opcode, data):
-        if self.psk:
+        if self.psk or self.keypair:
             self.sendSecure(counter,opcode,data)
         else:
             self.sendPlaintext(counter,opcode,data)
@@ -231,26 +242,46 @@ class _Client():
 
 
                 if opcode==2:
-                    servernonce,challenge,h = struct.unpack("<32s16s32s",data)
-            
-                    if not challenge==self.challenge:
-                        logging.debug("Client recieved bad challenge response")
+     
+                    if self.psk:
+                        servernonce,challenge,h = struct.unpack("<32s16s32s",data)
+                        if not challenge==self.challenge:
+                            logging.debug("Client recieved bad challenge response")
 
+                        #Ensure the nonce we get is real, or else someone could DoS us with bad nonces.
+                        if self.cipher.keyedhash(servernonce+challenge,self.psk)==h:
+                        
+                                #overwrite old string to Ensure challenge only used once
+                                self.challenge = os.urandom(16)
+                                
+                                #send client info
+                                m = struct.pack("<B16s32s32sQ",self.cipher.id,self.clientID,self.nonce,servernonce,self.counter)
+                                self.counter +=3
+                                v = self.cipher.keyedhash(m,self.psk)
+                                self.skey = self.cipher.keyedhash(servernonce+self.nonce,self.psk)
+                                self.sendSetup(0, 3, m+v)
 
-                    #Ensure the nonce we get is real, or else someone could DoS us with bad nonces.
-                    if self.cipher.keyedhash(servernonce+challenge,self.psk)==h:
-                        #overwrite old string to Ensure challenge only used once
-                        self.challenge = os.urandom(16)
-                        
-                        #send client info
-                        m = struct.pack("<B16s32s32sQ",self.cipher.id,self.clientID,self.nonce,servernonce,self.counter)
-                        self.counter +=3
-                        v = self.cipher.keyedhash(m,self.psk)
-                        self.skey = self.cipher.keyedhash(servernonce+self.nonce,self.psk)
-                        self.sendSetup(0, 3, m+v)
-                    else:
-                        logging.debug("Client recieved bad challenge response")
-                        
+                        else:
+                            logging.debug("Client recieved bad challenge response")
+                            
+                if opcode == 11:
+                    if  self.keypair:
+
+                        data = self.cipher.pubkey_decrypt(data[24:],data[:24],self.server_pubkey,self.keypair[1])
+                       
+                        servernonce,challenge = struct.unpack("<32s16s",data)
+
+                        m = struct.pack("<B",self.cipher.id)
+                        self.key = os.urandom(32)
+                        self.serverkey=os.urandom(32)
+
+                        n=os.urandom(24)
+
+                        #Send an ECC Client Info
+                        p = struct.pack("<32s32s32sQ",servernonce, self.key, self.serverkey,self.counter)
+                        p = self.cipher.pubkey_encrypt(p, n,self.server_pubkey,self.keypair[1])
+                        self.sendSetup(0, 12, self.clientID+m+n+p)
+
 
 
                 # print(msg,addr)
@@ -418,9 +449,9 @@ class _Client():
 
 
 class Client():
-    def __init__(self, address=('255.255.255.255',1783),clientID=None,psk=None,cipher=1,server=None):
+    def __init__(self, address=('255.255.255.255',1783),clientID=None,psk=None,cipher=1,keypair=None, serverkey=None, server=None):
         "Represents a public handle for  Pavillion client that can initiate requests"
-        self.client= _Client(address,clientID,psk,cipher, server,self)
+        self.client= _Client(address,clientID,psk,cipher=cipher, server=server,keypair=keypair,serverkey=serverkey,handle=self)
         self.clientID = clientID
 
     def sendMessage(self,target,name,value):

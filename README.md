@@ -33,4 +33,4 @@ General multicast application traffic belongs on port 1783 on multicast group 23
 
 ## What's working so far
 
-At the moment, we have secure reliable multicasting and that's about it
+At the moment, we have secure reliable multicasting with both ECC and preshared keys. Check out the unit tests for examples.

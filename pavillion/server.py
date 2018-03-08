@@ -138,8 +138,16 @@ class _ServerClient():
 
                 clientkey = self.server.keys[clientID]
 
-                m = self.nonce+challenge+ciphers[cipher].keyedhash(self.nonce+challenge,clientkey)
-                self.sendSetup(0, 2,m)
+                if not ciphers[cipher].asym_setup:
+                    m = self.nonce+challenge+ciphers[cipher].keyedhash(self.nonce+challenge,clientkey)
+                    self.sendSetup(0, 2,m)
+                
+                else:
+                    m = self.nonce+challenge
+                    n= os.urandom(24)
+                    m = n+ciphers[cipher].pubkey_encrypt(m,n,clientkey,self.server.ecc_keypair[1])
+                    self.sendSetup(0, 11,m)
+
 
             if opcode==3:
                 ciphernumber,clientid,clientnonce,servernonce,clientcounter,h = struct.unpack("<B16s32s32sQ32s",msg)
@@ -175,14 +183,16 @@ class _ServerClient():
                 cipher = msg[16]
 
                 decrypt = ciphers[cipher].pubkey_decrypt
-                msg= decrypt(msg[17:],nonce_from_number(counter),self.server.pubkeys[clientID],self.server.keypair[1])
+                msg= decrypt(msg[17+24:],msg[17:17+24],self.server.keys[clientID],self.server.ecc_keypair[1])
 
-                if msg[:32]==self.nonce:
+                nonce, ckey,skey, counter= struct.unpack("<32s32s32sQ",msg)
+                if nonce==self.nonce:
                    #Make sure that nonce isn't reused
                     self.nonce = os.urandom(32)
                     self.clientID = clientID
-                    self.ckey, self.skey, self.client_counter = struct.unpack("<32s32sQ")
-
+                    self.ckey, self.skey, self.client_counter = ckey,skey,counter
+                    self.decrypt = ciphers[cipher].decrypt
+                    self.encrypt = ciphers[cipher].encrypt
 
                     
 
@@ -230,6 +240,8 @@ class _Server():
         #A list of all the registers and functions indexed by number
         self.registers = {}
 
+
+        self.ecc_keypair = ecc_keypair
         self.running = True
         t = threading.Thread(target=self.loop)
         t.start()

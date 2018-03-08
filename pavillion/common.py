@@ -48,7 +48,7 @@ except:
 class SodiumCipher():
     "Object providing a Pavillion cipher interface to libsodium"
     id=1
-
+    asym_setup = False
     def encrypt(self,d,k,nonce):
         return libnacl.crypto_secretbox(d, nonce, k)
 
@@ -58,13 +58,17 @@ class SodiumCipher():
     def keyedhash(self,d,k):
         return libnacl.crypto_generichash(d,k)
 
-    def pubkey_encrypt(self,data,nonce,senderkey,recieverkey):
-        return libnacl.crypto_box(data,nonce,recieverkey,senderkey)
+    def pubkey_encrypt(self,data,nonce,pk,sk):
+        return libnacl.crypto_box(data,nonce,pk,sk)
 
-    def pubkey_decrypt(self,data,nonce,senderkey,recieverkey):
-        return libnacl.crypto_box(data,nonce,senderkey,recieverkey)
+    def pubkey_decrypt(self,data,nonce,pk,sk):
+        return libnacl.crypto_box_open(data,nonce,pk,sk)
+
+class libnacl_ecc(SodiumCipher):
+    id=2
+    asym_setup = True
 
 
 #Don't actually use testcipher
-ciphers = { 1:SodiumCipher()}
+ciphers = { 1:SodiumCipher(), 2:libnacl_ecc()}
 
