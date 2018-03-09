@@ -18,13 +18,17 @@ to read your messages, make fake ones, or do replay attacks.
 
 ## Client-Server model
 
-Pavillion uses a traditional client-server model, except that clients and servers may share a port. Only a client can initiate a request, and
-only a server may respond to or act on a request. This includes reliable and unreliable multicasting modes.
+Pavillion uses a traditional client-server model, except that clients and servers may share a port. With a few exceptions, only a client can initiate a request, and only a server may respond to or act on a request. This includes reliable and unreliable multicasting modes.
 
 Every client has a 16-byte client ID which may be freely and arbitrarily chosen as a username might be. Clients using security
 also have a 32 byte Preshared Key. This has to be a full-strength random key, because the protocol exposes it to offline attacks.
 
 This should not be an issue in the intended use cases.
+
+
+Messages from a client to a server may be multicast. As long as the servers listen on the same port, they will all recieve it, even with security enabled(If they all have the same keypair or PSK). Conceptually pavillion treats the servers as part of one distributed system.
+
+Messages from a server back to a client are normally unicast.
 
 ## Ports
 

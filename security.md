@@ -93,6 +93,8 @@ for PSK Nonce messages, in case the Invalid Client ID message was faked.
 The client's challenge must be included to prevent DoS attacks. Sending this message requires being able to recieve at the server's address
 and not just the ability to spoof it.
 
+
+
 ### Handling Errors
 Upon recieving a message from an unfamiliar sender, a server should send a Unrecognized Peer message, which has a counter of 0, an opcode of 5,
 and a data field of the client's 16 byte ID, and the client should respond with a nonce request.

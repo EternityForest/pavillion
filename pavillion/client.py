@@ -8,6 +8,8 @@ from .common import nonce_from_number,pavillion_logger,DEFAULT_PORT,DEFAULT_MCAS
 
 
 
+
+
 def is_multicast(addr):
     if not ":" in addr:
         a = addr.split(".")
@@ -42,6 +44,157 @@ class ExpectedAckCounter():
             self.e.set()
 
 
+
+
+class _RemoteServer():
+    """This class is used to keep track of the remote servers.
+       It handles most of the security setup steps, and keeps track of individual
+       S>C session keys. The client object itself handles C>S keys, as the client is pretending they
+       are all one server and there's only that key.
+
+       It is also used to handle incoming packets from servers.
+    """
+
+
+    def __init__(self,clientObject):
+        self.server_counter = 0
+        self.clientObject = clientObject
+
+        self.challenge = os.urandom(16)
+
+
+        #Each server has an individual key they use to send to us.
+        #We only have one key, because it's multicastable.clientObject
+
+        #So we just read that from the client object as needed
+        self.skey=None
+
+
+        #Last activity relating to this server, for knowing when to garbage collect it
+        self.lastused = time.time()
+
+        #Last activity relating to this server, for knowing when to garbage collect it
+        #Only counting activity originating on the client,
+        #Or activity from the server that is encrypted.
+        self.secure_lastused = time.time()
+
+    def sendSetup(self, counter, opcode, data):
+        "Send an unsecured packet"
+        m = struct.pack("<Q",counter)+struct.pack("<B",opcode)+data
+        self.clientObject.sock.sendto(b"PavillionS0"+m,self.clientObject.server_address)
+
+    def onRawMessage(self, msg,addr):
+        self.lastused = time.time()
+        s = b"PavillionS0"
+        if msg.startswith(s):
+            msg=msg[len(s):]
+            counter = struct.unpack("<Q",msg[:8])[0]
+        
+
+            #Normal Pavillion, pass through to application layer
+            if counter:
+                if self.skey:
+                    msg2 = self.clientObject.cipher.decrypt(msg[8:], self.skey,nonce_from_number(counter))
+                    #Duplicate protection
+                    if self.server_counter>=counter:
+                        pavillion_logger.debug("Duplicate Pavillion")
+                        return
+                    self.server_counter = counter
+
+                                
+                    opcode =msg2[0]
+                    data=msg2[1:]
+
+                    self.secure_lastused = time.time()
+                    self.clientObject.onMessage(addr,counter,opcode,data)
+
+                #We don't know how to process this message. So we send
+                #a nonce request to the server
+                else:
+                    self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.challenge)
+
+            #Counter 0 indicates protocol setup messages
+            else:
+                opcode = msg[8]
+                data = msg[9:]
+                #Message 5 is an "Unrecognized Client" message telling us to redo the whole auth process.
+                #Send a nonce request.
+                if opcode==5:
+                    self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.challenge)
+
+        
+                if opcode==6:
+                    if data==self.challenge:
+                        self.backoff_until = time.time()+15
+                        logging.error("Client attempted to connect with invalid client ID")
+
+                        #Refresh the challenge
+                        self.challenge = os.urandom(16)
+
+
+                if opcode==2:
+     
+                    if self.clientObject.psk:
+                        servernonce,challenge,h = struct.unpack("<32s16s32s",data)
+                        if not challenge==self.challenge:
+                            logging.debug("Client recieved bad challenge response")
+
+                        #Ensure the nonce we get is real, or else someone could DoS us with bad nonces.
+                        if self.clientObject.cipher.keyedhash(servernonce+challenge,self.clientObject.psk)==h:
+                        
+                                #overwrite old string to Ensure challenge only used once
+                                self.challenge = os.urandom(16)
+                                
+                                #send client info
+                                m = struct.pack("<B16s32s32sQ",self.clientObject.cipher.id,self.clientObject.clientID,self.clientObject.nonce,servernonce,self.clientObject.counter)
+                                self.clientObject.counter +=3
+                                v = self.clientObject.cipher.keyedhash(m,self.clientObject.psk)
+                                self.skey = self.clientObject.cipher.keyedhash(servernonce+self.clientObject.nonce,self.clientObject.psk)
+                                self.sendSetup(0, 3, m+v)
+
+                        else:
+                            logging.debug("Client recieved bad challenge response")
+                            
+                if opcode == 11:
+                    if  self.clientObject.keypair:
+                        data = self.clientObject.cipher.pubkey_decrypt(data[24:],data[:24],self.clientObject.server_pubkey,self.clientObject.keypair[1])
+                       
+                        servernonce,challenge = struct.unpack("<32s16s",data)
+
+                        m = struct.pack("<B",self.clientObject.cipher.id)
+                        self.serverkey=os.urandom(32)
+
+                        n=os.urandom(24)
+
+                        #Send an ECC Client Info
+                        p = struct.pack("<32s32s32sQ",servernonce, self.clientObject.key, self.serverkey,self.clientObject.counter)
+                        p = self.clientObject.cipher.pubkey_encrypt(p, n,self.clientObject.server_pubkey,self.clientObject.keypair[1])
+                        self.sendSetup(0, 12, self.clientObject.clientID+m+n+p)
+
+
+
+                # print(msg,addr)
+                # x = parsePavillion(msg)
+                # print(x)
+                # if x:
+                #     self.onMessage(m,addr)
+        else:
+            unsecure = b'Pavillion0'
+
+            #Only if PSK is None do we accept these unsecured messages
+            if self.clientObject.server.psk is None and s.startswith(unsecure):
+                msg=msg[len(unsecure):]
+                counter = struct.unpack("<Q",msg[:8])[0]
+                opcode=msg[8]
+                msg = msg[9:]
+                if opcode==11:
+                    self.synced = True
+                else:
+                    self.clientObject.server.onMessage(addr, counter,opcode,msg)
+                return
+
+            logging.warning("Bad header "+str(msg))
+
 class _Client():
     def __init__(self, address=('255.255.255.255',DEFAULT_PORT),clientID=None,psk=None,cipher=1,server=None,keypair=None, serverkey=None, handle=None):
         "Represents a Pavillion client that can both initiate and respond to requests"
@@ -63,6 +216,16 @@ class _Client():
 
         self.psk = psk
         self.clientID = clientID
+
+
+
+        #Conceptually, there is exactly one server, but in the case of multicast there's
+        #multiple machines even if they all have the same key.
+        self.max_servers = 128
+
+        #Known servers, indexed by (addr,port)
+        self.known_servers = {}
+
 
 
         self.skey = None
@@ -197,114 +360,7 @@ class _Client():
                 return len(self.known_subscribers[target])
 
 
-    def onRawMessage(self, msg,addr):
-        s = b"PavillionS0"
-        if msg.startswith(s):
-            msg=msg[len(s):]
-            counter = struct.unpack("<Q",msg[:8])[0]
-        
-
-            #Normal Pavillion, pass through to application layer
-            if counter:
-                if self.skey:
-                    msg2 = self.cipher.decrypt(msg[8:], self.skey,nonce_from_number(counter))
-                    #Duplicate protection
-                    if self.server_counter>=counter:
-                        pavillion_logger.debug("Duplicate Pavillion")
-                        return
-                    self.server_counter = counter
-
-                                
-                    opcode =msg2[0]
-                    data=msg2[1:]
-                    self.onMessage(addr,counter,opcode,data)
-
-                #We don't know how to process this message. So we send
-                #a nonce request to the server
-                else:
-                    self.sendSetup(0, 1, struct.pack("<B",self.cipher.id)+self.clientID+self.challenge)
-
-            #Counter 0 indicates protocol setup messages
-            else:
-                opcode = msg[8]
-                data = msg[9:]
-                #Message 5 is an "Unrecognized Client" message telling us to redo the whole auth process.
-                #Send a nonce request.
-                if opcode==5:
-                    self.sendSetup(0, 1, struct.pack("<B",self.cipher.id)+self.clientID+self.challenge)
-
-        
-                if opcode==6:
-                    if data==self.challenge:
-                        self.backoff_until = time.time()+15
-                        logging.error("Client attempted to connect with invalid client ID")
-                        self.challenge = os.urandom(16)
-
-
-                if opcode==2:
-     
-                    if self.psk:
-                        servernonce,challenge,h = struct.unpack("<32s16s32s",data)
-                        if not challenge==self.challenge:
-                            logging.debug("Client recieved bad challenge response")
-
-                        #Ensure the nonce we get is real, or else someone could DoS us with bad nonces.
-                        if self.cipher.keyedhash(servernonce+challenge,self.psk)==h:
-                        
-                                #overwrite old string to Ensure challenge only used once
-                                self.challenge = os.urandom(16)
-                                
-                                #send client info
-                                m = struct.pack("<B16s32s32sQ",self.cipher.id,self.clientID,self.nonce,servernonce,self.counter)
-                                self.counter +=3
-                                v = self.cipher.keyedhash(m,self.psk)
-                                self.skey = self.cipher.keyedhash(servernonce+self.nonce,self.psk)
-                                self.sendSetup(0, 3, m+v)
-
-                        else:
-                            logging.debug("Client recieved bad challenge response")
-                            
-                if opcode == 11:
-                    if  self.keypair:
-
-                        data = self.cipher.pubkey_decrypt(data[24:],data[:24],self.server_pubkey,self.keypair[1])
-                       
-                        servernonce,challenge = struct.unpack("<32s16s",data)
-
-                        m = struct.pack("<B",self.cipher.id)
-                        self.key = os.urandom(32)
-                        self.serverkey=os.urandom(32)
-
-                        n=os.urandom(24)
-
-                        #Send an ECC Client Info
-                        p = struct.pack("<32s32s32sQ",servernonce, self.key, self.serverkey,self.counter)
-                        p = self.cipher.pubkey_encrypt(p, n,self.server_pubkey,self.keypair[1])
-                        self.sendSetup(0, 12, self.clientID+m+n+p)
-
-
-
-                # print(msg,addr)
-                # x = parsePavillion(msg)
-                # print(x)
-                # if x:
-                #     self.onMessage(m,addr)
-        else:
-            unsecure = b'Pavillion0'
-
-            #Only if PSK is None do we accept these unsecured messages
-            if self.psk is None and s.startswith(unsecure):
-                msg=msg[len(unsecure):]
-                counter = struct.unpack("<Q",msg[:8])[0]
-                opcode=msg[8]
-                msg = msg[9:]
-                if opcode==11:
-                    self.synced = True
-                else:
-                    self.onMessage(addr, counter,opcode,msg)
-                return
-
-            logging.warning("Bad header "+str(msg))
+    
 
 
     def loop(self):
@@ -316,7 +372,20 @@ class _Client():
                 continue
 
             try:
-                self.onRawMessage(msg,addr)
+                if addr in self.known_servers:
+                    self.known_servers[addr].onRawMessage(msg,addr)
+                else:
+                    if len(self.known_servers)>self.max_servers:
+                        x = sorted(self.known_servers.values(), key=lambda x:x.secure_lastused)[0]
+
+                        if (x.secure_lastused<time.time()-300) and (x.lastused<time.time()-10):
+                            self.known_servers.remove(x.machine_addr)
+
+                    if not len(self.known_servers)>self.max_servers:
+                        self.known_servers[addr] = _RemoteServer(self)
+                        self.known_servers[addr].machine_addr = addr
+                        self.known_servers[addr].onRawMessage(msg,addr)
+
             except:
                 logging.exception("Exception in client loop")
      

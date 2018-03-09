@@ -211,6 +211,12 @@ class _Server():
            ecc_keypair is a tuple of raw binary (public,private) keys. If not supplied, the server is symmetric-only. 
            
         """
+
+
+        #Not implemented yet
+        self.broker=False
+
+
         self.keys = keys
         self.port = port
 
@@ -257,8 +263,6 @@ class _Server():
         self.lock = threading.Lock()
 
 
-
-    
     def onRPCCall(self, f, data,clientID):
         pass
 
@@ -289,7 +293,7 @@ class _Server():
 
     def onMessage(self,addr, counter, opcode, data,clientID=None):
         "Handle a message after decoding"
-        #Semi reliable message
+        #reliable message
         if  opcode==1:
             d = data.split(b'\n',2)
             #If we have a listener for that message target
@@ -300,6 +304,18 @@ class _Server():
                     #Do an acknowledgement
                     self.counter += 1
                     self.knownclients[addr].send(self.counter,2,struct.pack("<Q",counter))
+
+
+                #Repeat messages to all the other clients if broker mode is enabled.
+                if self.broker:
+                    try:
+                        for i in self.knownclients:
+                            if not i == addr:
+                                if d[0] in self.knownclients[i].subscriptions:
+                                    self.counter+=1
+                                    self.knownclients[addr].send(self.counter,i,data)
+                    except:
+                        pass
 
                 s = self.messageTargets[d[0].decode('utf-8')]
                 with self.targetslock:
