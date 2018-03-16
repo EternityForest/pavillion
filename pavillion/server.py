@@ -136,13 +136,14 @@ class _ServerClient():
                 clientID = msg[1:17]
                 challenge = msg[17:]
 
-                clientkey = self.server.keys[clientID]
 
                 if not ciphers[cipher].asym_setup:
+                    clientkey = self.server.keys[clientID]
                     m = self.nonce+challenge+ciphers[cipher].keyedhash(self.nonce+challenge,clientkey)
                     self.sendSetup(0, 2,m)
                 
                 else:
+                    clientkey = self.server.pubkeys[clientID]
                     m = self.nonce+challenge
                     n= os.urandom(24)
                     m = n+ciphers[cipher].pubkey_encrypt(m,n,clientkey,self.server.ecc_keypair[1])
@@ -183,7 +184,7 @@ class _ServerClient():
                 cipher = msg[16]
 
                 decrypt = ciphers[cipher].pubkey_decrypt
-                msg= decrypt(msg[17+24:],msg[17:17+24],self.server.keys[clientID],self.server.ecc_keypair[1])
+                msg= decrypt(msg[17+24:],msg[17:17+24],self.server.pubkeys[clientID],self.server.ecc_keypair[1])
 
                 nonce, ckey,skey, counter= struct.unpack("<32s32s32sQ",msg)
                 if nonce==self.nonce:
@@ -199,7 +200,7 @@ class _ServerClient():
 
 
 class _Server():
-    def __init__(self,port=DEFAULT_PORT,keys={},address='',multicast=None, ecc_keypair=None, handle=None):
+    def __init__(self,port=DEFAULT_PORT,keys=None,pubkeys=None,address='',multicast=None, ecc_keypair=None, handle=None):
         """The private server object that the user should not see except via the interface.
            This is because we don't want to
         
@@ -217,7 +218,9 @@ class _Server():
         self.broker=False
 
 
-        self.keys = keys
+        self.keys = keys or {}
+        self.pubkeys= pubkeys or {}
+
         self.port = port
 
         self.address = (address, port)
@@ -375,11 +378,11 @@ class _Server():
 
 class Server():
     """The public interface object that a user might interact with for a Server object"""
-    def __init__(self,port=DEFAULT_PORT, keys=None, address='',multicast=None,ecc_keypair=None):
+    def __init__(self,port=DEFAULT_PORT, keys=None,pubkeys=None, address='',multicast=None,ecc_keypair=None):
         keys = keys or {}
         #Yes, we want the objects to share the mutable dict, 
         self.keys = keys
-        self.server = _Server(port=port,keys=keys,address=address,multicast=multicast,ecc_keypair=ecc_keypair,handle=self)
+        self.server = _Server(port=port,keys=keys,pubkeys=pubkeys,address=address,multicast=multicast,ecc_keypair=ecc_keypair,handle=self)
     
     def messageTarget(self,target,function):
         "Subscibe function to target, and return a messageTarget object that you must retain in order to keep the subscription alive"
