@@ -2,7 +2,7 @@
 
 
 
-import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback
+import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback,queue
 
 from .common import nonce_from_number,pavillion_logger,DEFAULT_PORT,DEFAULT_MCAST_ADDR,ciphers,MAX_RETRIES
 
@@ -25,8 +25,10 @@ import queue
 
 
 class ReturnChannel():
-    def __init__(self,queue=None):
-        self.queue = queue or queue.Queue(64)
+    def __init__(self,q=None):
+        self.queue = q or queue.Queue(64)
+        #It's not a message target thing
+        self.target = None
     
     def onResponse(self,data):
         self.queue.put(data,True,3)
@@ -111,6 +113,7 @@ class _RemoteServer():
                 #We don't know how to process this message. So we send
                 #a nonce request to the server
                 else:
+                    pavillion_logger.warning("Recieved packet from unknown server, attempting setup")
                     self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.challenge)
 
             #Counter 0 indicates protocol setup messages
@@ -162,12 +165,12 @@ class _RemoteServer():
                         servernonce,challenge = struct.unpack("<32s16s",data)
 
                         m = struct.pack("<B",self.clientObject.cipher.id)
-                        self.serverkey=os.urandom(32)
+                        self.skey=os.urandom(32)
 
                         n=os.urandom(24)
 
                         #Send an ECC Client Info
-                        p = struct.pack("<32s32s32sQ",servernonce, self.clientObject.key, self.serverkey,self.clientObject.counter)
+                        p = struct.pack("<32s32s32sQ",servernonce, self.clientObject.key, self.skey,self.clientObject.counter)
                         p = self.clientObject.cipher.pubkey_encrypt(p, n,self.clientObject.server_pubkey,self.clientObject.keypair[1])
                         self.sendSetup(0, 12, self.clientObject.clientID+m+n+p)
 
@@ -375,16 +378,17 @@ class _Client():
                 if addr in self.known_servers:
                     self.known_servers[addr].onRawMessage(msg,addr)
                 else:
-                    if len(self.known_servers)>self.max_servers:
-                        x = sorted(self.known_servers.values(), key=lambda x:x.secure_lastused)[0]
+                    with self.lock:
+                        if len(self.known_servers)>self.max_servers:
+                            x = sorted(self.known_servers.values(), key=lambda x:x.secure_lastused)[0]
 
-                        if (x.secure_lastused<time.time()-300) and (x.lastused<time.time()-10):
-                            self.known_servers.remove(x.machine_addr)
+                            if (x.secure_lastused<time.time()-300) and (x.lastused<time.time()-10):
+                                self.known_servers.remove(x.machine_addr)
 
-                    if not len(self.known_servers)>self.max_servers:
-                        self.known_servers[addr] = _RemoteServer(self)
-                        self.known_servers[addr].machine_addr = addr
-                        self.known_servers[addr].onRawMessage(msg,addr)
+                        if not len(self.known_servers)>self.max_servers:
+                            self.known_servers[addr] = _RemoteServer(self)
+                            self.known_servers[addr].machine_addr = addr
+                            self.known_servers[addr].onRawMessage(msg,addr)
 
             except:
                 logging.exception("Exception in client loop")
@@ -399,9 +403,22 @@ class _Client():
                 msg,addr = self.msock.recvfrom(4096)
             except socket.timeout:
                 continue
-
             try:
-                self.onRawMessage(msg,addr)
+                if addr in self.known_servers:
+                    self.known_servers[addr].onRawMessage(msg,addr)
+                else:
+                    with self.lock:
+                        if len(self.known_servers)>self.max_servers:
+                            x = sorted(self.known_servers.values(), key=lambda x:x.secure_lastused)[0]
+
+                            if (x.secure_lastused<time.time()-300) and (x.lastused<time.time()-10):
+                                self.known_servers.remove(x.machine_addr)
+
+                        if not len(self.known_servers)>self.max_servers:
+                            self.known_servers[addr] = _RemoteServer(self)
+                            self.known_servers[addr].machine_addr = addr
+                            self.known_servers[addr].onRawMessage(msg,addr)
+
             except:
                 logging.exception("Exception in client loop")
      
@@ -412,8 +429,7 @@ class _Client():
         #If we've recieved an ack or a call response
         if opcode==2 or opcode==5:
             #Get the message number it's an ack for
-            d = struct.unpack("<Q",data)[0]
-
+            d = struct.unpack("<Q",data[:8])[0]
 
             if d in self.waitingForAck:
                 #We've seen a subscriber for that target
@@ -422,7 +438,7 @@ class _Client():
 
                 try:
                     #Decrement the counter that started at 0
-                    self.waitingForAck[d].onResponse(data)
+                    self.waitingForAck[d].onResponse(data[8:])
                 except Exception:
                     print(traceback.format_exc(6))
                     pass
@@ -441,6 +457,8 @@ class _Client():
                 self.cleanSubscribers()
                 self.known_subscribers[t]={s:time.time()}
 
+
+
     def sendMessage(self, target, name, data, reliable=True, timeout = 10):
         "Attempt to send the message to all subscribers. Does not raise an error on failure, but will attempt retries"
         with self.lock:
@@ -449,7 +467,7 @@ class _Client():
 
         if reliable:
             try:
-                expected = len([i for i in known_subscribers[t] if i>120])
+                expected = len([i for i in self.known_subscribers[t] if i>120])
             except:
                 expected = 1
 
@@ -506,13 +524,14 @@ class _Client():
             time.sleep(x)
             self.send(counter, 4, struct.pack("<H",name)+data)
 
-        if q.Empty():
+        if q.empty():
             raise RuntimeError("Server did not respond")
         
         d = q.get()
-        if struct.unpack("<H",d[:2])[0] >0:
-            raise RuntimeError(d[2:].decode("utf-8","backslashreplace"))
-        return d[1][2:]
+        returncode = struct.unpack("<H",d[:2])[0]
+        if  returncode >0:
+            raise RuntimeError("Error code "+str(returncode)+d[2:].decode("utf-8","backslashreplace"))
+        return d[2:]
 
 
 
@@ -528,3 +547,6 @@ class Client():
 
     def close(self):
         self.client.close()
+
+    def call(self,function,data=b''):
+        return self.client.call(function, data)

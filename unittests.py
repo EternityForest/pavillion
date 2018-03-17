@@ -4,6 +4,32 @@ import time
 import libnacl
 if __name__ == '__main__':
     import unittest
+
+
+    class TestRPC(unittest.TestCase):
+        pass
+
+        def test_rpc(self):
+            c_pub, c_pk = libnacl.crypto_box_keypair()
+
+            s_pub, s_pk = libnacl.crypto_box_keypair()
+            
+            cid2 = b'cid2'*4
+
+            #Servers identify clients by client id and key pairs.
+            s = Server(pubkeys={cid2:c_pub}, ecc_keypair=(s_pub,s_pk))
+            c = Client(keypair=(c_pub,c_pk), serverkey=s_pub, clientID=cid2,cipher=2)
+
+            time.sleep(0.55)
+            r= Register("test","foooo")
+
+            s.registers[400] =r
+
+            x = c.call(400, b'A test string')
+
+            self.assertEqual(x, b'A test string')
+
+
     class TestPubsub(unittest.TestCase):
 
         def test_pubkey_coms(self):

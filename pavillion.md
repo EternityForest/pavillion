@@ -58,7 +58,8 @@ Represents an acknowledgement of an `01 reliable message` packet. Data is the me
 Same as reliable but should not trigger an acknowledgement message.
 
 #### 4: RPC Call
-The first 2 bytes represent a function number, where the first 4096 are reserved. The remaining represents an argument string to the called function.
+The first 2 bytes represent a function number, where the first 4096 are reserved. The remaining represents an argument string to the called function. Currently RPC calls must be idempotent or
+else it is not possible to automatically retry them.
 
 #### 5: RPC Response
 The first 8 bytes represent the packet number of the RPC call being responded to. The next 2 represent a response typecode, where anything other than 0 indicates an error. 

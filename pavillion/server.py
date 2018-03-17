@@ -194,10 +194,7 @@ class _ServerClient():
                     self.ckey, self.skey, self.client_counter = ckey,skey,counter
                     self.decrypt = ciphers[cipher].decrypt
                     self.encrypt = ciphers[cipher].encrypt
-
-                    
-
-
+                    logging.info("Setup connection with client via ECC")
 
 class _Server():
     def __init__(self,port=DEFAULT_PORT,keys=None,pubkeys=None,address='',multicast=None, ecc_keypair=None, handle=None):
@@ -344,13 +341,14 @@ class _Server():
         #RPC Call
         elif  opcode==4:
             try:
-                r = struct.unpack("<H",data[0:2])
+                r = struct.unpack("<H",data[0:2])[0]
                 f = self.registers[r]
                 d = f.call(clientID, data[2:])
-
-                self.knownclients[addr].send(self.counter,5,struct.pack("<Q",counter)+b'\x01\x01'+bytes(d))
+                self.counter +=1
+                self.knownclients[addr].send(self.counter,5,struct.pack("<Q",counter)+b'\x00\x00'+bytes(d))
             except:
                 #If an exception happens, then send the traceback to the client.
+                print(traceback.format_exc())
                 self.counter += 1
                 self.knownclients[addr].send(self.counter,5,struct.pack("<Q",counter)+b'\x01\x01Exception on remote server\r\n'+traceback.format_exc(6).encode('utf-8'))
                 
@@ -382,8 +380,9 @@ class Server():
         keys = keys or {}
         #Yes, we want the objects to share the mutable dict, 
         self.keys = keys
+        self.pubkeys = pubkeys
         self.server = _Server(port=port,keys=keys,pubkeys=pubkeys,address=address,multicast=multicast,ecc_keypair=ecc_keypair,handle=self)
-    
+        self.registers = self.server.registers
     def messageTarget(self,target,function):
         "Subscibe function to target, and return a messageTarget object that you must retain in order to keep the subscription alive"
         return self.server.messageTarget(target,function)
