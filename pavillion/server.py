@@ -19,7 +19,7 @@ from .common import ciphers,DEFAULT_MCAST_ADDR,DEFAULT_PORT,nonce_from_number,pa
 
 
 
-
+SESSION_TIMEOUT = 300
 
 
 class Register():
@@ -38,6 +38,7 @@ class Register():
         self.value = value
         return self.value
 
+
 class MessageTarget():
     def __init__(self,target,callback):
         self.callback = callback
@@ -49,6 +50,7 @@ class _ServerClient():
         self.nonce = os.urandom(32)
         self.address = address
         self.ckey = None
+        self.skey = None
         self.server = server
         self.client_counter =0
         self.clientID = None
@@ -62,6 +64,13 @@ class _ServerClient():
         #we don't yet know the cipher
         self.decrypt=None
         self.encrypt=None
+
+        self.ignore = 0
+
+        self.created = time.time()
+        #The last time we actually got a proper message from them
+        self.lastSeen =0
+
 
     def sendSetup(self, counter, opcode, data):
         "Send an unsecured packet"
@@ -112,10 +121,11 @@ class _ServerClient():
         counter = struct.unpack("<Q",msg[:8])[0]
 
 
-        if counter:
+        if not self.ignore>time.time() and counter:
             ciphertext = msg[8:]
             if self.ckey:
                 plaintext = self.decrypt(ciphertext,  self.ckey, nonce_from_number(counter))
+                self.lastSeen = time.time()
                 #Duplicate protection
                 if self.client_counter>=counter:
                     return
@@ -126,6 +136,7 @@ class _ServerClient():
             #an unrecognized client
             else:
                 self.sendSetup(0, 5, b'')
+                self.ignore = time.time()+5
 
         else:
             opcode=msg[8]
@@ -138,16 +149,37 @@ class _ServerClient():
 
 
                 if not ciphers[cipher].asym_setup:
+                    if not clientID in self.server.keys:
+
+                        if self.ignore<time.time():
+                            #Send the invalid message
+                            self.sendSetup(0, 6,challenge)
+
+                        self.ignore = time.time()+10*60
+                        return
+
                     clientkey = self.server.keys[clientID]
                     m = self.nonce+challenge+ciphers[cipher].keyedhash(self.nonce+challenge,clientkey)
                     self.sendSetup(0, 2,m)
                 
                 else:
+                    if not clientID in self.server.pubkeys:
+                        if self.ignore<time.time():
+                            #Send the invalid message
+                            self.sendSetup(0, 6,challenge)
+
+                        self.ignore = time.time()+10*60
+                        return
+
                     clientkey = self.server.pubkeys[clientID]
                     m = self.nonce+challenge
                     n= os.urandom(24)
                     m = n+ciphers[cipher].pubkey_encrypt(m,n,clientkey,self.server.ecc_keypair[1])
                     self.sendSetup(0, 11,m)
+
+            #In the ignore state, we will ignore messages aside from Nonce requests.
+            if self.ignore >time.time():
+                return
 
 
             if opcode==3:
@@ -237,6 +269,7 @@ class _Server():
         self.sock.bind(self.address)
         self.sock.settimeout(1)
 
+        self.mcastgroup = multicast
         #Subscribe to any requested mcast group
         if multicast:
             group = socket.inet_aton(multicast)
@@ -262,6 +295,8 @@ class _Server():
         self.targetslock = threading.Lock()
         self.lock = threading.Lock()
 
+        #Max number of clients we keep track of, icluding ignored ones
+        self.maxclients = 512
 
     def onRPCCall(self, f, data,clientID):
         pass
@@ -343,7 +378,10 @@ class _Server():
             try:
                 r = struct.unpack("<H",data[0:2])[0]
                 f = self.registers[r]
-                d = f.call(clientID, data[2:])
+                if callable(f):
+                    d = f(clientID, data[2:])
+                else:
+                    d = f.call(clientID, data[2:])
                 self.counter +=1
                 self.knownclients[addr].send(self.counter,5,struct.pack("<Q",counter)+b'\x00\x00'+bytes(d))
             except:
@@ -360,10 +398,23 @@ class _Server():
                 m,addr = self.sock.recvfrom(4096)
             except socket.timeout:
                 continue
-            if addr==self.address:
-                continue
+         
             try:
+                if addr==self.address:
+                    continue
                 if not addr in self.knownclients:
+                    #If we're out of space for new clients, go through and find one we haven't seen in a while.
+                    if len(self.knownclients)>self.maxclients:
+                        torm=False
+                        for i in sorted(list(self.knownclients.items()),key=lambda x: x[1].created):
+                            if i[1].lastSeen < time.time()-SESSION_TIMEOUT:
+                                torm=i[0]
+                        if torm:
+                            del self.knownclients[torm]
+                        else:
+                            #Don't drop old sessions for new ones
+                            continue
+
                     self.knownclients[addr] = _ServerClient(self, addr)
                 self.knownclients[addr].onRawMessage(addr,m)
             except:

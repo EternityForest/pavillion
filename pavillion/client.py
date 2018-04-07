@@ -128,7 +128,7 @@ class _RemoteServer():
         
                 if opcode==6:
                     if data==self.challenge:
-                        self.backoff_until = time.time()+15
+                        self.backoff_until = time.time()+10
                         logging.error("Client attempted to connect with invalid client ID")
 
                         #Refresh the challenge
@@ -337,6 +337,7 @@ class _Client():
 
     def sendSecure(self, counter, opcode, data):
         "Send a secured packet"
+        self.lastSent = time
         q = struct.pack("<Q",counter)
         n = b'\x00'*(24-8)+struct.pack("<Q",counter)
         m = struct.pack("<B",opcode)+data

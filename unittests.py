@@ -25,10 +25,16 @@ if __name__ == '__main__':
 
             s.registers[400] =r
 
+            #Using the "Direct function" method which doesn't have as much introspection capability
+            s.registers[401] =lambda c,a: a
+
             x = c.call(400, b'A test string')
 
             self.assertEqual(x, b'A test string')
 
+            x = c.call(401, b'A test string')
+
+            self.assertEqual(x, b'A test string')
 
     class TestPubsub(unittest.TestCase):
 
@@ -126,6 +132,46 @@ if __name__ == '__main__':
             finally:
                 c.close()
 
+        def test_conflict(self):
+            "Create a client and server, send a message from client to server"
+            try:
+                psk = b'PSK1'*8
+                psk2 = b'PSK2'*8
+
+                cid2 = b'cid2'*4
+
+                #Servers identify clients by client id and key pairs.
+                s = Server(keys={cid2:psk})
+                
+                #This server is also on the default group.
+                #It has a different key
+                s2 = Server(keys={cid2:psk2})
+
+                c = Client(psk=psk, clientID=cid2)
+
+                time.sleep(0.5)
+
+                incoming = []
+
+                #The ID of the client will be None if the message is sent unsecured.
+                def z(name,data,client):
+                    incoming.append((name,data,client))
+
+                m = s.messageTarget('TestTarget',z)
+
+                c.sendMessage("TestTarget","MessageName",b'data')
+                
+                start = time.time()
+                while(not incoming):
+                    time.sleep(0.1)
+                    if start<time.time()-5:
+                        raise RuntimeError("Timed Out")
+
+                self.assertEqual(incoming[0],("MessageName",b'data',c.clientID))
+
+
+            finally:
+                c.close()
 
 
         def test_wrong_client(self):
