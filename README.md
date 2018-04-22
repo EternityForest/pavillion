@@ -1,4 +1,5 @@
 # Pavillion UDP Protocol
+![logo](logo.jpg)
 
 ## Intro
 
@@ -8,17 +9,15 @@ This reference implementation is written in Python, but the protocol is designed
 
 There is no requirement for message brokers, devices simply send directly to each other.
 
-In addition, Pavillion aims to integrate encryption at the application layer, using the usual libsodium. The protocol is designed
-to allow for future ciphers to be added
+In addition, Pavillion aims to integrate encryption at the application layer, using the usual libsodium. The protocol is designed to allow for future ciphers to be added
 
 *As I am not a cryptography expert, you have no reason to trust this, but it should deter casual snooping.*
 
-Not that it isn't *intended* to be fairly secure. It doesn't provide perfect forward secrecy or anything like that, but in theory nobody should be able
-to read your messages, make fake ones, or do replay attacks.
+Not that it isn't *intended* to be fairly secure. It doesn't provide perfect forward secrecy or anything like that, but in theory nobody should be able to read your messages, make fake ones, or do replay attacks.They can easily do traffic analysis to learn your message lengths.
 
 Right now this doesn't even have a version number and everything is subject to change.
 
-##Example
+## Examples
 ### RPC With public keys
 ```
     from pavillion import *
@@ -61,21 +60,20 @@ In addition, the rest of the API is the same for PSK as it is for public key.
 
 Pavillion uses a traditional client-server model, except that clients and servers may share a port. With a few exceptions, only a client can initiate a request, and only a server may respond to or act on a request. This includes reliable and unreliable multicasting modes.
 
-Every client has a 16-byte client ID which may be freely and arbitrarily chosen as a username might be. Clients using security
-also have a 32 byte Preshared Key. This has to be a full-strength random key, because the protocol exposes it to offline attacks.
+Every client has a 16-byte client ID which may be freely and arbitrarily chosen as a username might be. Clients using PSK security also have a 32 byte Preshared Key. This has to be a full-strength random key, because the protocol exposes it to offline attacks. Clients can also be identified by a 32 byte ECC keypair.
 
 This should not be an issue in the intended use cases.
 
 
-Messages from a client to a server may be multicast. As long as the servers listen on the same port, they will all recieve it, even with security enabled(If they all have the same keypair or PSK). Conceptually pavillion treats the servers as part of one distributed system.
+Messages from a client to a server may be multicast. As long as the servers listen on the same port, they will all recieve it, even with security enabled(If they all have the same keypair or PSK). This differs from datagram TLS which often only supports unicast.
 
 Messages from a server back to a client are normally unicast.
 
 ## Ports
 
-General multicast application traffic belongs on port 1783 on multicast group 239.255.28.12.
+General multicast application traffic uses port 1783 on multicast group 239.255.28.12 by default, but performance could go down if you have many unrelated applications sharing a multicast address.
 
 
 ## What's working so far
 
-At the moment, we have secure reliable multicasting with both ECC and preshared keys. Check out the unit tests for examples.
+At the moment, we have secure reliable multicasting with both ECC and preshared keys. We have RPC calls, and we can use multicast groups for encrypted many-to-many messaging. Check out the unit tests for more examples.
