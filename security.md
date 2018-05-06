@@ -31,13 +31,17 @@ This protocol does not intend to provide forward secrecy. A session key compromi
 
 ## security setup process
 
-### PSK Nonce Request(Client to server, Security opcode 1)
+### Nonce Request(Client to server, Security opcode 1)
 When a client wants to send a message to a server, it first sends a Nonce Request, which is simply
 a message with counter 0 followed by a single 1 byte as the opcode, then the client's 1 byte cipher number,then a 16 byte challenge,
 then the client's 16 byte Client ID. Servers recieving this should reply with a PSK Nonce if the cipher number specifies PSK encryption,
 or with an ECC Nonce otherwise.
 
-`CipherNumber[1], ClientChallenge[16],ClientID[16]`
+The client pubkey is optional and used to allow "guests" not previously known by the system to connect. In this case, the library should
+report a client ID derived from the first 16 bytes of the blake2b hash of the client's pubkey to the application layer, and the
+actual client ID sent should be ignored.
+
+`CipherNumber[1], ClientChallenge[16],ClientID[16] [ClientPubkey[32]]`
 
 ### PSK Nonce(S>C, Opcode 2)
 

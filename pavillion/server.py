@@ -54,7 +54,7 @@ class _ServerClient():
         self.server = server
         self.client_counter =0
         self.clientID = None
-
+        self.guest_key = None
         #ServerChallenge in the docs
         self.challenge = os.urandom(16)
         self.plaintext = plaintext
@@ -145,7 +145,17 @@ class _ServerClient():
             if opcode==1:
                 cipher = msg[0]
                 clientID = msg[1:17]
-                challenge = msg[17:]
+                challenge = msg[17:17+17]
+
+                client_pubkey = msg[17+16:]
+
+                if self.server.allow_guest and not clientID in self.server.pubkeys:
+                    #Don't let someone else mess up the connection
+                    if self.guest_key and not self.guest_key == client_pubkey:
+                        return
+
+                    self.guest_key = client_pubkey
+                    self.guest_id = clientID
 
 
                 if not ciphers[cipher].asym_setup:
@@ -163,7 +173,7 @@ class _ServerClient():
                     self.sendSetup(0, 2,m)
                 
                 else:
-                    if not clientID in self.server.pubkeys:
+                    if (not clientID in self.server.pubkeys) and not self.guest_key:
                         if self.ignore<time.time():
                             #Send the invalid message
                             self.sendSetup(0, 6,challenge)
@@ -171,15 +181,12 @@ class _ServerClient():
                         self.ignore = time.time()+10*60
                         return
 
-                    clientkey = self.server.pubkeys[clientID]
+                    clientkey = self.guest_key or self.server.pubkeys[clientID]
                     m = self.nonce+challenge
                     n= os.urandom(24)
                     m = n+ciphers[cipher].pubkey_encrypt(m,n,clientkey,self.server.ecc_keypair[1])
                     self.sendSetup(0, 11,m)
 
-            #In the ignore state, we will ignore messages aside from Nonce requests.
-            if self.ignore >time.time():
-                return
 
 
             if opcode==3:
@@ -216,7 +223,10 @@ class _ServerClient():
                 cipher = msg[16]
 
                 decrypt = ciphers[cipher].pubkey_decrypt
-                msg= decrypt(msg[17+24:],msg[17:17+24],self.server.pubkeys[clientID],self.server.ecc_keypair[1])
+
+                cpubkey = self.guest_key or self.server.pubkeys[clientID]
+
+                msg= decrypt(msg[17+24:],msg[17:17+24],cpubkey,self.server.ecc_keypair[1])
 
                 nonce, ckey,skey, counter= struct.unpack("<32s32s32sQ",msg)
                 if nonce==self.nonce:
@@ -226,10 +236,14 @@ class _ServerClient():
                     self.ckey, self.skey, self.client_counter = ckey,skey,counter
                     self.decrypt = ciphers[cipher].decrypt
                     self.encrypt = ciphers[cipher].encrypt
+
+                    #If we used a guest key, report the hash of said guest key
+                    if self.guest_key:
+                        self.clientID = common.libnacl.generic_hash(self.guest_key)
                     logging.info("Setup connection with client via ECC")
 
 class _Server():
-    def __init__(self,port=DEFAULT_PORT,keys=None,pubkeys=None,address='',multicast=None, ecc_keypair=None, handle=None):
+    def __init__(self,port=DEFAULT_PORT,keys=None,pubkeys=None,address='',multicast=None, ecc_keypair=None, handle=None, allow_guest=False):
         """The private server object that the user should not see except via the interface.
            This is because we don't want to
         
@@ -251,8 +265,12 @@ class _Server():
         self.pubkeys= pubkeys or {}
 
         self.port = port
-
         self.address = (address, port)
+
+
+        self.guest_key = None
+        self.allow_guest = allow_guest
+
 
         def cl(*args):
             self.close()
@@ -263,7 +281,8 @@ class _Server():
     
         # Create the socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)  
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1) 
         # Bind to the server address
         self.sock.bind(self.address)
@@ -282,9 +301,7 @@ class _Server():
 
         self.ecc_keypair = ecc_keypair
         self.running = True
-        t = threading.Thread(target=self.loop)
-        t.start()
-
+     
 
         self.knownclients = collections.OrderedDict()
 
@@ -295,8 +312,14 @@ class _Server():
         self.targetslock = threading.Lock()
         self.lock = threading.Lock()
 
-        #Max number of clients we keep track of, icluding ignored ones
+        #Max number of clients we keep track of, including ignored ones
         self.maxclients = 512
+        t = threading.Thread(target=self.loop)
+        t.name+=":PavillionServer"
+        t.start()
+
+
+
 
     def onRPCCall(self, f, data,clientID):
         pass
@@ -389,7 +412,9 @@ class _Server():
                 print(traceback.format_exc())
                 self.counter += 1
                 self.knownclients[addr].send(self.counter,5,struct.pack("<Q",counter)+b'\x01\x01Exception on remote server\r\n'+traceback.format_exc(6).encode('utf-8'))
-                
+
+
+                    
 
 
     def loop(self):
@@ -424,15 +449,14 @@ class _Server():
         self.sock.close()
 
 
-
 class Server():
     """The public interface object that a user might interact with for a Server object"""
-    def __init__(self,port=DEFAULT_PORT, keys=None,pubkeys=None, address='',multicast=None,ecc_keypair=None):
+    def __init__(self,port=DEFAULT_PORT, keys=None,pubkeys=None, address='',multicast=None,ecc_keypair=None,allow_guest=False):
         keys = keys or {}
         #Yes, we want the objects to share the mutable dict, 
         self.keys = keys
         self.pubkeys = pubkeys
-        self.server = _Server(port=port,keys=keys,pubkeys=pubkeys,address=address,multicast=multicast,ecc_keypair=ecc_keypair,handle=self)
+        self.server = _Server(port=port,keys=keys,pubkeys=pubkeys,address=address,multicast=multicast,ecc_keypair=ecc_keypair,handle=self,allow_guest=allow_guest)
         self.registers = self.server.registers
     def messageTarget(self,target,function):
         "Subscibe function to target, and return a messageTarget object that you must retain in order to keep the subscription alive"

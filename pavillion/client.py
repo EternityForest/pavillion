@@ -1,7 +1,4 @@
 
-
-
-
 import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback,queue
 
 from .common import nonce_from_number,pavillion_logger,DEFAULT_PORT,DEFAULT_MCAST_ADDR,ciphers,MAX_RETRIES
@@ -80,10 +77,17 @@ class _RemoteServer():
         #Or activity from the server that is encrypted.
         self.secure_lastused = time.time()
 
-    def sendSetup(self, counter, opcode, data):
+    def sendSetup(self, counter, opcode, data,addr=None):
         "Send an unsecured packet"
         m = struct.pack("<Q",counter)+struct.pack("<B",opcode)+data
-        self.clientObject.sock.sendto(b"PavillionS0"+m,self.clientObject.server_address)
+        self.clientObject.sock.sendto(b"PavillionS0"+m, self.clientObject.server_address)
+
+    def sendNonceRequest(self):
+        if self.clientObject.keypair:
+            self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.challenge+self.clientObject.keypair[1])
+        else:
+            self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.challenge)
+
 
     def onRawMessage(self, msg,addr):
         self.lastused = time.time()
@@ -114,7 +118,7 @@ class _RemoteServer():
                 #a nonce request to the server
                 else:
                     pavillion_logger.warning("Recieved packet from unknown server, attempting setup")
-                    self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.challenge)
+                    self.sendNonceRequest()
 
             #Counter 0 indicates protocol setup messages
             else:
@@ -123,7 +127,7 @@ class _RemoteServer():
                 #Message 5 is an "Unrecognized Client" message telling us to redo the whole auth process.
                 #Send a nonce request.
                 if opcode==5:
-                    self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.challenge)
+                    self.sendNonceRequest()
 
         
                 if opcode==6:
@@ -153,7 +157,7 @@ class _RemoteServer():
                                 self.clientObject.counter +=3
                                 v = self.clientObject.cipher.keyedhash(m,self.clientObject.psk)
                                 self.skey = self.clientObject.cipher.keyedhash(servernonce+self.clientObject.nonce,self.clientObject.psk)
-                                self.sendSetup(0, 3, m+v)
+                                self.sendSetup(0, 3, m+v,addr=addr)
 
                         else:
                             logging.debug("Client recieved bad challenge response")
@@ -172,7 +176,7 @@ class _RemoteServer():
                         #Send an ECC Client Info
                         p = struct.pack("<32s32s32sQ",servernonce, self.clientObject.key, self.skey,self.clientObject.counter)
                         p = self.clientObject.cipher.pubkey_encrypt(p, n,self.clientObject.server_pubkey,self.clientObject.keypair[1])
-                        self.sendSetup(0, 12, self.clientObject.clientID+m+n+p)
+                        self.sendSetup(0, 12, self.clientObject.clientID+m+n+p,addr=addr)
 
 
 
@@ -235,6 +239,10 @@ class _Client():
         self.nonce = os.urandom(32)
         self.challenge = os.urandom(16)
 
+        if self.keypair == "guest":
+            self.keypair = libnacl.crypto_box_keypair()
+
+        
         if self.psk:
             self.key = self.cipher.keyedhash(self.nonce,psk)
         
@@ -243,6 +251,12 @@ class _Client():
         else:
             self.key= None
 
+  
+        if not self.clientID:
+            if self.keypair:
+                self.clientID = libnacl.generic_hash(self.keypair[0])
+
+        
         
 
         self_address = ('', 0)
@@ -261,6 +275,7 @@ class _Client():
         if is_multicast(address[0]):
             # Create the socket
             self.msock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.msock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)  
             self.msock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  
             self.msock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1) 
             # Bind to the server address
@@ -292,10 +307,13 @@ class _Client():
 
 
         t = threading.Thread(target=self.loop)
+        t.name+=":PavillionClient"
+
         t.start()
 
         if is_multicast(address[0]):
             t = threading.Thread(target=self.mcast_loop)
+            t.name+=":PavillionClient"
             t.start()
 
 
@@ -318,31 +336,31 @@ class _Client():
     def close(self):
         self.running = False
 
-    def send(self, counter, opcode, data):
+    def send(self, counter, opcode, data,addr=None):
         if self.psk or self.keypair:
-            self.sendSecure(counter,opcode,data)
+            self.sendSecure(counter,opcode,data,addr)
         else:
-            self.sendPlaintext(counter,opcode,data)
+            self.sendPlaintext(counter,opcode,data,addr)
 
 
-    def sendPlaintext(self, counter, opcode, data):
+    def sendPlaintext(self, counter, opcode, data,addr=None):
         "Send an unsecured packet"
         m = struct.pack("<Q",counter)+struct.pack("<B",opcode)+data
-        self.sock.sendto(b"Pavillion0"+m,self.server_address)
+        self.sock.sendto(b"Pavillion0"+m,addr or self.server_address)
 
-    def sendSetup(self, counter, opcode, data):
+    def sendSetup(self, counter, opcode, data,addr=None):
         "Send an unsecured packet"
         m = struct.pack("<Q",counter)+struct.pack("<B",opcode)+data
         self.sock.sendto(b"PavillionS0"+m,self.server_address)
 
-    def sendSecure(self, counter, opcode, data):
+    def sendSecure(self, counter, opcode, data,addr=None):
         "Send a secured packet"
         self.lastSent = time
         q = struct.pack("<Q",counter)
         n = b'\x00'*(24-8)+struct.pack("<Q",counter)
         m = struct.pack("<B",opcode)+data
         m = self.cipher.encrypt(m,self.key,n)
-        self.sock.sendto(b"PavillionS0"+q+m,self.server_address)
+        self.sock.sendto(b"PavillionS0"+q+m,addr or self.server_address)
 
 
     #Get rid of old subscribers, only call from seenSubscriber
@@ -447,11 +465,13 @@ class _Client():
     #Call this with target, IP when you get an ACK from a packet you sent
     #It uses a lock so it's probably really slow, but that's fine because
     #This protocol isn't meant for high data rate stuff.
-    def seenSubscriber(self,t,s):
+    def seenSubscriber(self,s, t):
         with self.subslock:
+            if not t in self.known_subscribers or( not s in self.known_subscribers[t]):
+                self.handle().onNewSubscriber(t,s)
             if t in self.known_subscribers:
                 x = self.known_subscribers[t]
-                if not s in t:
+                if not s in x:
                     self.cleanSubscribers()
                 x[s] = time.time()
             else:
@@ -460,7 +480,7 @@ class _Client():
 
 
 
-    def sendMessage(self, target, name, data, reliable=True, timeout = 10):
+    def sendMessage(self, target, name, data, reliable=True, timeout = 10,addr=None):
         "Attempt to send the message to all subscribers. Does not raise an error on failure, but will attempt retries"
         with self.lock:
             self.counter+=1
@@ -477,8 +497,10 @@ class _Client():
             w.target = target
             self.waitingForAck[counter] =w
         
-        self.send(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data)
-
+        if not addr:
+            self.send(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data)
+        else:
+            self.sendToself.known_subscribers
 
         #Resend loop
         if reliable:
@@ -495,7 +517,7 @@ class _Client():
                 self.send(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data)
 
         #Return how many subscribers definitely recieved the message.
-        return expected-w.counter
+        return max(0,expected-w.counter)
                 
 
     def call(self,name,data, timeout=10):
@@ -543,11 +565,20 @@ class Client():
         self.client= _Client(address,clientID,psk,cipher=cipher, server=server,keypair=keypair,serverkey=serverkey,handle=self)
         self.clientID = clientID
 
-    def sendMessage(self,target,name,value):
-        return self.client.sendMessage(target,name,value)
+    def sendMessage(self,target,name,value,reliable=True, timeout=5,addr=None):
+        """
+            Send a message to the associated server(s) for this client. Addr may be a (ip,port) tuple
+            Allowing multicast clienys to send to a specific server
+        """
+        return self.client.sendMessage(target,name,value,reliable, timeout, addr)
 
     def close(self):
         self.client.close()
 
     def call(self,function,data=b''):
         return self.client.call(function, data)
+
+    def onNewSubscriber(self, target, addr):
+        """
+            Meant for subclassing. Used for detecting when a new server begins listening to a message target.
+        """
