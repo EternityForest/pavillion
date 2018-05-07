@@ -2,7 +2,7 @@
 import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback,queue
 
 from .common import nonce_from_number,pavillion_logger,DEFAULT_PORT,DEFAULT_MCAST_ADDR,ciphers,MAX_RETRIES
-
+from . import common
 
 
 
@@ -100,7 +100,13 @@ class _RemoteServer():
             #Normal Pavillion, pass through to application layer
             if counter:
                 if self.skey:
-                    msg2 = self.clientObject.cipher.decrypt(msg[8:], self.skey,nonce_from_number(counter))
+                    try:
+                        msg2 = self.clientObject.cipher.decrypt(msg[8:], self.skey,nonce_from_number(counter))
+                    except:
+                        #MOst of the time this is going to be not something we can do anything about.
+                        return
+
+
                     #Duplicate protection
                     if self.server_counter>=counter:
                         pavillion_logger.debug("Duplicate Pavillion")
@@ -233,7 +239,8 @@ class _Client():
         #Known servers, indexed by (addr,port)
         self.known_servers = {}
 
-
+        #Last send message to each target that we have subs for
+        self._keepalive_times = {}
 
         self.skey = None
         self.nonce = os.urandom(32)
@@ -299,7 +306,7 @@ class _Client():
         #lastseen time  dicts indexed by the name of what you are subscribing to, then indexed by subscriber IP
         #This is a list of *other* machines that are subscribing. All a "subscription" is, is a response to a multicast packet.
         #If we get less responses than usual, we know we should retry.
-        self.known_subscribers = {}
+        self.knownSubscribers = {}
 
         self.subslock = threading.Lock()
         self.waitingForAck = weakref.WeakValueDictionary()
@@ -334,7 +341,15 @@ class _Client():
 
 
     def close(self):
-        self.running = False
+        with self.lock:
+            if self.running:
+                self.counter+=1
+                self.sendSecure(self.counter,12,b'')
+                self.running = False
+
+        with common.lock:
+            if self in common.cleanup_refs:
+                common.cleanup_refs.append(weakref.ref(self))
 
     def send(self, counter, opcode, data,addr=None):
         if self.psk or self.keypair:
@@ -363,23 +378,41 @@ class _Client():
         self.sock.sendto(b"PavillionS0"+q+m,addr or self.server_address)
 
 
-    #Get rid of old subscribers, only call from seenSubscriber
-    def cleanSubscribers(self):
+    #Get rid of old subscribers, only call from _seenSubscriber
+    def _cleanSubscribers(self):
             try:
-                for i in self.known_subscribers:
-                    for j in self.known_subscribers[i]:
-                        if self.known_subscribers[i](j)[1]<time.time()-120:
-                            self.known_subscribers[i].pop(j)
+                torm_o = []
+                for i in self.knownSubscribers:
+                    torm = []
+                    for j in self.knownSubscribers[i]:
+                        if self.knownSubscribers[i](j)[1]<time.time()-240:
+                            torm.append(j)
+                    for j in torm:
+                            self.knownSubscribers[i].pop(j)
+                            self.handle().onRemoveSubscriber(i,j)
+                    if not self.knownSubscribers[i]:
+                        torm_o.append(i)
+                for i in torm_o:
+                    del self.knownSubscribers[i]
+                    try:
+                        del self._keepalive_times[i]
+                    except:
+                        pass
             except:
                 pass
 
+    def _doKeepAlive(self):
+        for i in self._keepalive_times:
+            if self._keepalive_times[i]<time.time()-30:
+                self.sendMessage(i,'',b'', reliable=False)
+                self._keepalive_times[i]=time.time()
 
     def countBroadcastSubscribers(self,target):
         with self.subslock:
-            if not target in self.known_subscribers:
+            if not target in self.knownSubscribers:
                 return 0
             else:
-                return len(self.known_subscribers[target])
+                return len(self.knownSubscribers[target])
 
 
     
@@ -387,10 +420,18 @@ class _Client():
 
     def loop(self):
         "Main loop that should always be running in a thread"
+        l = time.time()
         while(self.running):
             try:
                 msg,addr = self.sock.recvfrom(4096)
             except socket.timeout:
+                #Send keepalive messages, remove those who have not
+                #responded for 240s, which is probably about 6 packets.
+
+                if time.time()-l>30:
+                    self._doKeepAlive()
+                    with self.subslock:
+                        self._cleanSubscribers()
                 continue
 
             try:
@@ -453,7 +494,7 @@ class _Client():
             if d in self.waitingForAck:
                 #We've seen a subscriber for that target
                 if self.waitingForAck[d].target:
-                    self.seenSubscriber(addr,self.waitingForAck[d].target)
+                    self._seenSubscriber(addr,self.waitingForAck[d].target)
 
                 try:
                     #Decrement the counter that started at 0
@@ -462,21 +503,21 @@ class _Client():
                     print(traceback.format_exc(6))
                     pass
 
-    #Call this with target, IP when you get an ACK from a packet you sent
+    #Call this with addr, target when you get an ACK from a packet you sent
     #It uses a lock so it's probably really slow, but that's fine because
     #This protocol isn't meant for high data rate stuff.
-    def seenSubscriber(self,s, t):
+    def _seenSubscriber(self,s, t):
         with self.subslock:
-            if not t in self.known_subscribers or( not s in self.known_subscribers[t]):
+            if not t in self.knownSubscribers or( not s in self.knownSubscribers[t]):
                 self.handle().onNewSubscriber(t,s)
-            if t in self.known_subscribers:
-                x = self.known_subscribers[t]
+            if t in self.knownSubscribers:
+                x = self.knownSubscribers[t]
                 if not s in x:
                     self.cleanSubscribers()
                 x[s] = time.time()
             else:
-                self.cleanSubscribers()
-                self.known_subscribers[t]={s:time.time()}
+                self._cleanSubscribers()
+                self.knownSubscribers[t]={s:time.time()}
 
 
 
@@ -485,10 +526,11 @@ class _Client():
         with self.lock:
             self.counter+=1
             counter = self.counter
+        self._keepalive_times[target]=time.time()
 
         if reliable:
             try:
-                expected = len([i for i in self.known_subscribers[t] if i>120])
+                expected = len([i for i in self.knownSubscribers[t] if i>120])
             except:
                 expected = 1
 
@@ -497,10 +539,8 @@ class _Client():
             w.target = target
             self.waitingForAck[counter] =w
         
-        if not addr:
-            self.send(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data)
-        else:
-            self.sendToself.known_subscribers
+        self.send(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data,addr=addr)
+
 
         #Resend loop
         if reliable:
@@ -515,10 +555,11 @@ class _Client():
                 if e.wait(x):
                     return
                 self.send(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data)
-
-        #Return how many subscribers definitely recieved the message.
-        return max(0,expected-w.counter)
-                
+        if reliable:
+            #Return how many subscribers definitely recieved the message.
+            return max(0,expected-w.counter)
+        else:
+            return
 
     def call(self,name,data, timeout=10):
         "Call a function by it's register ID"
@@ -564,6 +605,13 @@ class Client():
         "Represents a public handle for  Pavillion client that can initiate requests"
         self.client= _Client(address,clientID,psk,cipher=cipher, server=server,keypair=keypair,serverkey=serverkey,handle=self)
         self.clientID = clientID
+        self.knownSubscribers = self.client.knownSubscribers
+        
+      
+
+    @property
+    def address(self):
+        return self.client.sock.getsockname()
 
     def sendMessage(self,target,name,value,reliable=True, timeout=5,addr=None):
         """
@@ -573,12 +621,21 @@ class Client():
         return self.client.sendMessage(target,name,value,reliable, timeout, addr)
 
     def close(self):
-        self.client.close()
+        self.client.close()    
+       
 
     def call(self,function,data=b''):
         return self.client.call(function, data)
 
+    def countBroadcastSubscribers(self,topic):
+        return self.client.countBroadcastSubscribers(topic)
+
     def onNewSubscriber(self, target, addr):
         """
             Meant for subclassing. Used for detecting when a new server begins listening to a message target.
+        """
+
+    def onRemoveSubscriber(self, target, addr):
+        """
+            Meant for subclassing. Used for detecting when a server is no longer listening to a message target
         """

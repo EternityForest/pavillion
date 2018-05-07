@@ -36,6 +36,12 @@ cid2 = b'cid2'*4
 s = Server(pubkeys={cid2:c_pub}, ecc_keypair=(s_pub,s_pk))
 c = Client(keypair=(c_pub,c_pk), serverkey=s_pub, clientID=cid2,cipher=2)
 
+#This is a property returning a ip,port pair that the client is bound to
+c.address
+
+#This is an empty dict, but you can put ip,port pairs there to ignore them
+s.ignore
+
 #Define an RPC function, call it on the client
 s.registers[401] =lambda c,a: a
 
@@ -56,6 +62,7 @@ In addition, the rest of the API is the same for PSK as it is for public key.
     c.sendMessage("TestTarget","MessageName",b'data')
 
 ```
+
 ## Client-Server model
 
 Pavillion uses a traditional client-server model, except that clients and servers may share a port. With a few exceptions, only a client can initiate a request, and only a server may respond to or act on a request. This includes reliable and unreliable multicasting modes.

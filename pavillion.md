@@ -107,6 +107,9 @@ Sent by the server in response to a sync message from the client to acknowledge 
 Data area format:
 <8 byte LE of packet counter of original message>
 
+#### 12: Quit
+This message may be sent by either party, and signals the end of a session. Another quit message may be sent in reply.
+The first 2 bytes should be 0 to indicate normal exiting.
 
 #### Opcode 15
 

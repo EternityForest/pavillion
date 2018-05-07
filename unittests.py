@@ -476,10 +476,11 @@ if __name__ == '__main__':
             finally:
                 c.close()
 
-        def test_coms_2servers_2clients_1randomserver(self):
+        def test_coms_2servers_2clients_2randomserver_2randomclient(self):
             try:
                 psk = b'PSK1'*8
                 cid1 = b'cid1'*4
+                cid2 = b'cid2'*4
 
                 psk2 = b'PSK2'*8
 
@@ -489,10 +490,18 @@ if __name__ == '__main__':
                 #Servers identify clients by client id and key pairs.
                 s = Server(keys={cid1:psk},multicast=group)
                 s2 = Server(keys={cid1:psk},multicast=group)
+
+                #interfering servers
                 s3 = Server(keys={cid1:psk2},multicast=group)
+                s4 = Server(keys={cid2:psk2},multicast=group)
+
 
                 c = Client(psk=psk, clientID=cid1,address=(group,1783))
                 c2 = Client(psk=psk, clientID=cid1,address=(group,1783))
+
+                #interfering clients
+                c3 = Client(psk=psk2, clientID=cid1,address=(group,1783))
+                c4 = Client(psk=psk, clientID=cid2,address=(group,1783))
 
                 time.sleep(0.5)
 
