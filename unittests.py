@@ -412,7 +412,10 @@ if __name__ == '__main__':
                     time.sleep(0.1)
                     if start<time.time()-5:
                         raise RuntimeError("Timed Out")
-
+                while(not incoming2):
+                    time.sleep(0.1)
+                    if start<time.time()-5:
+                        raise RuntimeError("Timed Out")
                 self.assertEqual(incoming[0],("MessageName",b'data',c.clientID))
                 self.assertEqual(incoming2[0],("MessageName",b'data',c.clientID))
 
@@ -428,11 +431,16 @@ if __name__ == '__main__':
 
 
 
-                #Try the same thing but with the other server
+                #Try the same thing but with the other client
                 c2.sendMessage("TestTarget","MessageName",b'data')
                 
                 start = time.time()
                 while(not incoming):
+                    time.sleep(0.1)
+                    if start<time.time()-5:
+                        raise RuntimeError("Timed Out")
+
+                while(not incoming2):
                     time.sleep(0.1)
                     if start<time.time()-5:
                         raise RuntimeError("Timed Out")
@@ -530,6 +538,11 @@ if __name__ == '__main__':
                     if start<time.time()-5:
                         raise RuntimeError("Timed Out")
 
+                while(not incoming2):
+                    time.sleep(0.1)
+                    if start<time.time()-5:
+                        raise RuntimeError("Timed Out")
+
                 self.assertEqual(incoming[0],("MessageName",b'data',c.clientID))
                 self.assertEqual(incoming2[0],("MessageName",b'data',c.clientID))
 
@@ -554,6 +567,10 @@ if __name__ == '__main__':
                     if start<time.time()-5:
                         raise RuntimeError("Timed Out")
 
+                while(not incoming2):
+                    time.sleep(0.1)
+                    if start<time.time()-5:
+                        raise RuntimeError("Timed Out")
                 self.assertEqual(incoming[0],("MessageName",b'data',c.clientID))
                 self.assertEqual(incoming2[0],("MessageName",b'data',c.clientID))
 
