@@ -1,11 +1,11 @@
 
-import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback,queue
+import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback,queue,libnacl
 
 from .common import nonce_from_number,pavillion_logger,DEFAULT_PORT,DEFAULT_MCAST_ADDR,ciphers,MAX_RETRIES
 from . import common
 
 
-debug_mode = False
+debug_mode = True
 def dbg(*a):
     if debug_mode:
         print (a)
@@ -96,6 +96,8 @@ class _RemoteServer():
     def onRawMessage(self, msg,addr):
         self.lastused = time.time()
         s = b"PavillionS0"
+        clientobj = self.clientObject
+
         if msg.startswith(s):
             msg=msg[len(s):]
             counter = struct.unpack("<Q",msg[:8])[0]
@@ -105,7 +107,7 @@ class _RemoteServer():
             if counter:
                 if self.skey:
                     try:
-                        msg2 = self.clientObject.cipher.decrypt(msg[8:], self.skey,nonce_from_number(counter))
+                        msg2 = clientobj.cipher.decrypt(msg[8:], self.skey,nonce_from_number(counter))
                     except Exception as e:
                         #MOst of the time this is going to be not something we can do anything about.
                         return
@@ -121,7 +123,7 @@ class _RemoteServer():
                     opcode =msg2[0]
                     data=msg2[1:]
                     self.secure_lastused = time.time()
-                    self.clientObject.onMessage(addr,counter,opcode,data)
+                    clientobj.onMessage(addr,counter,opcode,data)
 
                 #We don't know how to process this message. So we send
                 #a nonce request to the server
@@ -151,46 +153,58 @@ class _RemoteServer():
 
                 if opcode==2:
      
-                    if self.clientObject.psk:
-                        servernonce,challenge,h = struct.unpack("<32s16s32s",data)
-                        if not challenge==self.challenge:
-                            dbg("client recieved bad challenge response", challenge, self.challenge)
-                            logging.debug("Client recieved bad challenge response")
-                        dbg("Valid response")
-                        #Ensure the nonce we get is real, or else someone could DoS us with bad nonces.
-                        if self.clientObject.cipher.keyedhash(servernonce+challenge,self.clientObject.psk)==h:
-                        
-                                #overwrite old string to Ensure challenge only used once
-                                self.challenge = os.urandom(16)
-                                
-                                #send client info
-                                m = struct.pack("<B16s32s32sQ",self.clientObject.cipher.id,self.clientObject.clientID,self.clientObject.nonce,servernonce,self.clientObject.counter)
-                                self.clientObject.counter +=3
-                                v = self.clientObject.cipher.keyedhash(m,self.clientObject.psk)
-                                self.skey = self.clientObject.cipher.keyedhash(self.clientObject.nonce+servernonce,self.clientObject.psk)
-                                self.sendSetup(0, 3, m+v,addr=addr)
+                    if clientobj.psk:
+                        with clientobj.challengelock:
+                            servernonce,challenge,h = struct.unpack("<32s16s32s",data)
+                            if not challenge==clientobj.challenge:
+                                dbg("client recieved bad challenge response", challenge, clientobj.challenge)
+                                logging.debug("Client recieved bad challenge response")
+                                return
+                            dbg("Valid response")
+                            #Ensure the nonce we get is real, or else someone could DoS us with bad nonces.
+                            if time.time()-clientobj.lastChangedChallenge>30:
+                                clientobj.usedServerNonces = {}
+                                clientobj.challenge = os.urandom(16)
+                                clientobj.lastChangedChallenge = time.time()
 
-                        else:
-                            dbg(servernonce+challenge,self.clientObject.psk)
-                            dbg("client recieved bad challenge response hash",  self.clientObject.cipher.keyedhash(servernonce+challenge,self.clientObject.psk), h)
+                            if servernonce in clientobj.usedServerNonces:
+                                return
 
-                            logging.debug("Client recieved bad challenge response")
+                            if clientobj.cipher.keyedhash(servernonce+challenge,clientobj.psk)==h:
+                                    #We can accept more than one response per challenge, but each particular
+                                    #is only usable once
+                                    clientobj.usedServerNonces[servernonce] = True
+                                    dbg("valid hash")
+                
+                                    #send client info
+                                    m = struct.pack("<B16s32s32sQ",clientobj.cipher.id,clientobj.clientID,clientobj.nonce,servernonce,clientobj.counter)
+                                    clientobj.counter +=3
+                                    print(clientobj.counter)
+                                    v = clientobj.cipher.keyedhash(m,clientobj.psk)
+                                    self.skey = clientobj.cipher.keyedhash(clientobj.nonce+servernonce,clientobj.psk)
+                                    self.sendSetup(0, 3, m+v,addr=addr)
+
+                            else:
+                                dbg(servernonce+challenge,clientobj.psk)
+                                dbg("client recieved bad challenge response hash",  clientobj.cipher.keyedhash(servernonce+challenge,clientobj.psk), h)
+
+                                logging.debug("Client recieved bad challenge response")
                             
                 if opcode == 11:
-                    if  self.clientObject.keypair:
-                        data = self.clientObject.cipher.pubkey_decrypt(data[24:],data[:24],self.clientObject.server_pubkey,self.clientObject.keypair[1])
+                    if  clientobj.keypair:
+                        data = clientobj.cipher.pubkey_decrypt(data[24:],data[:24],clientobj.server_pubkey,clientobj.keypair[1])
                        
                         servernonce,challenge = struct.unpack("<32s16s",data)
 
-                        m = struct.pack("<B",self.clientObject.cipher.id)
+                        m = struct.pack("<B",clientobj.cipher.id)
                         self.skey=os.urandom(32)
 
                         n=os.urandom(24)
 
                         #Send an ECC Client Info
-                        p = struct.pack("<32s32s32sQ",servernonce, self.clientObject.key, self.skey,self.clientObject.counter)
-                        p = self.clientObject.cipher.pubkey_encrypt(p, n,self.clientObject.server_pubkey,self.clientObject.keypair[1])
-                        self.sendSetup(0, 12, self.clientObject.clientID+m+n+p,addr=addr)
+                        p = struct.pack("<32s32s32sQ",servernonce, clientobj.key, self.skey,clientobj.counter)
+                        p = clientobj.cipher.pubkey_encrypt(p, n,clientobj.server_pubkey,clientobj.keypair[1])
+                        self.sendSetup(0, 12, clientobj.clientID+m+n+p,addr=addr)
 
 
 
@@ -203,7 +217,7 @@ class _RemoteServer():
             unsecure = b'Pavillion0'
 
             #Only if PSK is None do we accept these unsecured messages
-            if self.clientObject.server.psk is None and s.startswith(unsecure):
+            if clientobj.server.psk is None and s.startswith(unsecure):
                 msg=msg[len(unsecure):]
                 counter = struct.unpack("<Q",msg[:8])[0]
                 opcode=msg[8]
@@ -211,7 +225,7 @@ class _RemoteServer():
                 if opcode==11:
                     self.synced = True
                 else:
-                    self.clientObject.server.onMessage(addr, counter,opcode,msg)
+                    clientobj.server.onMessage(addr, counter,opcode,msg)
                 return
 
             logging.warning("Bad header "+str(msg))
@@ -224,7 +238,7 @@ class _Client():
 
         #Our message counter
         self.counter = random.randint(1024,1000000000)
-
+        print(self.counter)
         self.server_counter = 0
 
         self.cipher= ciphers[cipher]
@@ -238,7 +252,11 @@ class _Client():
         self.psk = psk
         self.clientID = clientID
 
-
+        self.lastChangedChallenge = time.time()
+        self.challengelock = threading.Lock()
+        self.nonce = os.urandom(32)
+        self.challenge = os.urandom(16)
+        self.usedServerNonces = {}
 
         #Conceptually, there is exactly one server, but in the case of multicast there's
         #multiple machines even if they all have the same key.
@@ -251,9 +269,7 @@ class _Client():
         self._keepalive_times = {}
 
         self.skey = None
-        self.nonce = os.urandom(32)
-        self.challenge = os.urandom(16)
-
+      
         if self.keypair == "guest":
             self.keypair = libnacl.crypto_box_keypair()
 
@@ -269,7 +285,7 @@ class _Client():
   
         if not self.clientID:
             if self.keypair:
-                self.clientID = libnacl.generic_hash(self.keypair[0])
+                self.clientID = libnacl.crypto_generichash(self.keypair[0])
 
         
         
@@ -332,10 +348,13 @@ class _Client():
             t.start()
 
 
+
+
         if self.psk and self.clientID:
             self.sendSetup(0, 1, struct.pack("<B",self.cipher.id)+self.clientID+self.challenge)
         elif self.keypair:
             self.sendSetup(0, 1, struct.pack("<B",self.cipher.id)+self.clientID+self.challenge)
+
 
         else:
             self.synced = False

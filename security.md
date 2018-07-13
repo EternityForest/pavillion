@@ -29,6 +29,8 @@ One server may serve multiple clients with different keys. As usual, a server an
 This protocol does not intend to provide forward secrecy. A session key compromise compromises all past and future messages. Session keys are not changed once established if it can be avoided.
 
 
+
+
 ## security setup process
 
 ### Nonce Request(Client to server, Security opcode 1)
@@ -38,9 +40,14 @@ or with an ECC Nonce otherwise.
 
 The client pubkey is optional and used to allow "guests" not previously known by the system to connect. In this case, the library should
 report a client ID derived from the first 16 bytes of the blake2b hash of the client's pubkey to the application layer, and the
-actual client ID sent should be ignored.
+actual client ID sent should be ignored. If not used it should be all zeros.
 
-`CipherNumber[1], ,ClientID[16],ClientChallenge[16] [ClientPubkey[32]]`
+Because of multicasting, a client should accept multiple responses to a challenge, but should only accept one particular response once.
+This will involve recording each the nonce or hash for each response and clearing the list when you generate a new challenge.
+
+Challenges should change at least once a minute.
+
+`CipherNumber[1], ,ClientID[16],ClientChallenge[16] ClientPubkey[32]]`
 
 ### PSK Nonce(S>C, Opcode 2)
 
@@ -53,6 +60,8 @@ followed by a 16 byte random server challenge, followed by the 32 byte keyed has
 Clients should not accept nonces with incorrect hashes to prevent an easy DoS attack.
 
 Clients recieving a Nonce(For any reason, requested or not), must reply with a PSK Client Info message.
+
+The server nonce must not be reused across connection setup events.
 
 
 ### PSK Client Info(C>S, Opcode 3)
@@ -74,7 +83,10 @@ with the preshared key.
 Messages to the client must be keyed using the hash of the Client's nonce followed by the server's nonce keyed with the preshared key. Giving the client full control of it's send key allows
 support for multicasting.
 
-The hashing method shall be defined on a per-cipher suite basis. As challenge-response is a fairly basic and common primative, future ciphers 
+The hashing method shall be defined on a per-cipher suite basis. As challenge-response is a fairly basic and common primative, future ciphers will
+probably use the same packet structure.
+
+
 
 
 ### Unrecognized Client (Opcode 4, S>C)
