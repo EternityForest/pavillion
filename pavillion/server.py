@@ -72,6 +72,11 @@ class _ServerClient():
         self.lastSeen =0
 
 
+        #Sessions IDs are initialized to random values.
+        #It's used so that servers can detect if they are still connected
+        self.sessionID = os.urandom(16)
+
+
     def sendSetup(self, counter, opcode, data):
         "Send an unsecured packet"
         m = struct.pack("<Q",counter)+struct.pack("<B",opcode)+data
@@ -124,7 +129,13 @@ class _ServerClient():
         if not self.ignore>time.time() and counter:
             ciphertext = msg[8:]
             if self.ckey:
-                plaintext = self.decrypt(ciphertext,  self.ckey, nonce_from_number(counter))
+                try:
+                    plaintext = self.decrypt(ciphertext,  self.ckey, nonce_from_number(counter))
+                except:
+                    self.sendSetup(0, 4, b'')
+                    self.ignore = time.time()+5
+                    return
+                
                 self.lastSeen = time.time()
                 #Duplicate protection
                 if self.client_counter>=counter:
@@ -135,19 +146,22 @@ class _ServerClient():
             #We don't know how to process this message. So we send
             #an unrecognized client
             else:
-                self.sendSetup(0, 5, b'')
+                self.sendSetup(0, 4, b'')
                 self.ignore = time.time()+5
+                return
 
         else:
             opcode=msg[8]
             msg = msg[9:]
             #Nonce request, send a nonce
             if opcode==1:
-                cipher = msg[0]
-                clientID = msg[1:17]
-                challenge = msg[17:17+17]
+                print(len(msg))
+                cipher, clientID, challenge, sessionID, client_pubkey= struct.unpack("<B16s16s16s32s", msg)
 
-                client_pubkey = msg[17+16:]
+                if self.sessionID == sessionID:
+                    #We're already connected,
+                    return
+
 
                 if self.server.allow_guest and not clientID in self.server.pubkeys:
                     #Don't let someone else mess up the connection
@@ -204,7 +218,11 @@ class _ServerClient():
                     self.encrypt = cipher.encrypt
                     self.decrypt = cipher.decrypt                  
                     #Client to server session key
-                    self.ckey= keyedhash(clientnonce,psk)
+                    self.ckey= keyedhash(clientnonce,clientnonce)
+
+                    #Rehash to get the sessoin ID
+                    self.sessionID = keyedhash(self.ckey, psk)[:16]
+
                     self.lastseen = time.time()
                     #Server to client session key
                     self.skey= keyedhash(clientnonce+servernonce,psk)
@@ -213,6 +231,7 @@ class _ServerClient():
 
                     #Make sure that nonce isn't reused
                     self.nonce = os.urandom(32)
+                    self.sendSetup(0, 7, self.sessionID)
                 else:
                     raise RuntimeError(str((s)))
             
@@ -220,6 +239,7 @@ class _ServerClient():
             if opcode == 12:
                 clientID = msg[0:16]
                 cipher = msg[16]
+                keyedhash = ciphers[cipher].keyedhash
 
                 decrypt = ciphers[cipher].pubkey_decrypt
 
@@ -230,9 +250,11 @@ class _ServerClient():
                 nonce, ckey,skey, counter= struct.unpack("<32s32s32sQ",msg)
                 if nonce==self.nonce:
                    #Make sure that nonce isn't reused
-                    self.nonce = os.urandom(32)
                     self.clientID = clientID
                     self.ckey, self.skey, self.client_counter = ckey,skey,counter
+                    self.sessionID = keyedhash(self.ckey, nonce)[:16]
+                    self.nonce = os.urandom(32)
+
                     self.decrypt = ciphers[cipher].decrypt
                     self.encrypt = ciphers[cipher].encrypt
 

@@ -5,7 +5,23 @@ from .common import nonce_from_number,pavillion_logger,DEFAULT_PORT,DEFAULT_MCAS
 from . import common
 
 
-debug_mode = True
+class RemoteError(Exception):
+    pass
+
+class BadInput(RemoteError):
+    pass
+
+class NonexistentFile(RemoteError):
+    pass
+
+class NoResponseError(RemoteError):
+    pass
+rerrs = {
+    1: RemoteError,
+    3: BadInput,
+    4: NonexistentFile
+}
+debug_mode = False
 def dbg(*a):
     if debug_mode:
         print (a)
@@ -87,10 +103,10 @@ class _RemoteServer():
 
     def sendNonceRequest(self):
         if self.clientObject.keypair:
-            self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.challenge+self.clientObject.keypair[1])
+            self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.clientObject.challenge+self.clientObject.sessionID+self.clientObject.keypair[1])
         else:
             dbg("challenge", self.challenge)
-            self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.challenge)
+            self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.clientObject.challenge+self.clientObject.sessionID+b'\0'*32)
 
 
     def onRawMessage(self, msg,addr):
@@ -109,12 +125,14 @@ class _RemoteServer():
                     try:
                         msg2 = clientobj.cipher.decrypt(msg[8:], self.skey,nonce_from_number(counter))
                     except Exception as e:
+                        print("baaad",self.skey)
                         #MOst of the time this is going to be not something we can do anything about.
                         return
 
 
                     #Duplicate protection
                     if self.server_counter>=counter:
+                        print("dupe")
                         pavillion_logger.debug("Duplicate Pavillion")
                         return
                     self.server_counter = counter
@@ -136,11 +154,14 @@ class _RemoteServer():
             else:
                 opcode = msg[8]
                 data = msg[9:]
-                #Message 5 is an "Unrecognized Client" message telling us to redo the whole auth process.
+                #Message 4 is an "Unrecognized Client" message telling us to redo the whole auth process.
                 #Send a nonce request.
-                if opcode==5:
+                if opcode==4:
+                    print("unrecognonized")
                     self.sendNonceRequest()
-
+                
+                if opcode==7:
+                    print("scl",msg)
         
                 if opcode==6:
                     if data==self.challenge:
@@ -152,12 +173,12 @@ class _RemoteServer():
 
 
                 if opcode==2:
-     
+                    print("got opcode 2")
                     if clientobj.psk:
                         with clientobj.challengelock:
                             servernonce,challenge,h = struct.unpack("<32s16s32s",data)
                             if not challenge==clientobj.challenge:
-                                dbg("client recieved bad challenge response", challenge, clientobj.challenge)
+                                dbg("client recieved bad challenge response", challenge, clientobj.challenge, data)
                                 logging.debug("Client recieved bad challenge response")
                                 return
                             dbg("Valid response")
@@ -174,19 +195,20 @@ class _RemoteServer():
                                     #We can accept more than one response per challenge, but each particular
                                     #is only usable once
                                     clientobj.usedServerNonces[servernonce] = True
-                                    dbg("valid hash")
+                                    dbg("valid hash",addr)
                 
                                     #send client info
                                     m = struct.pack("<B16s32s32sQ",clientobj.cipher.id,clientobj.clientID,clientobj.nonce,servernonce,clientobj.counter)
                                     clientobj.counter +=3
-                                    print(clientobj.counter)
                                     v = clientobj.cipher.keyedhash(m,clientobj.psk)
                                     self.skey = clientobj.cipher.keyedhash(clientobj.nonce+servernonce,clientobj.psk)
+                                    self.sessionID = clientobj.cipher.keyedhash(clientobj.key, servernonce)[:16]
+
                                     self.sendSetup(0, 3, m+v,addr=addr)
 
                             else:
                                 dbg(servernonce+challenge,clientobj.psk)
-                                dbg("client recieved bad challenge response hash",  clientobj.cipher.keyedhash(servernonce+challenge,clientobj.psk), h)
+                                dbg("client recieved bad challenge response hash",  clientobj.cipher.keyedhash(servernonce+challenge,clientobj.psk), h,data)
 
                                 logging.debug("Client recieved bad challenge response")
                             
@@ -204,7 +226,7 @@ class _RemoteServer():
                         #Send an ECC Client Info
                         p = struct.pack("<32s32s32sQ",servernonce, clientobj.key, self.skey,clientobj.counter)
                         p = clientobj.cipher.pubkey_encrypt(p, n,clientobj.server_pubkey,clientobj.keypair[1])
-                        self.sendSetup(0, 12, clientobj.clientID+m+n+p,addr=addr)
+                        self.sendSetup(0, 12, m+n+p,addr=addr)
 
 
 
@@ -238,7 +260,6 @@ class _Client():
 
         #Our message counter
         self.counter = random.randint(1024,1000000000)
-        print(self.counter)
         self.server_counter = 0
 
         self.cipher= ciphers[cipher]
@@ -276,13 +297,17 @@ class _Client():
         
         if self.psk:
             self.key = self.cipher.keyedhash(self.nonce,psk)
+            self.sessionID = self.cipher.keyedhash(self.key, self.nonce)[:16]
+
         
         elif  self.keypair:
             self.key = os.urandom(32)
+            self.sessionID = os.urandom(16)
         else:
             self.key= None
+            self.sessionID = os.urandom(16)
 
-  
+
         if not self.clientID:
             if self.keypair:
                 self.clientID = libnacl.crypto_generichash(self.keypair[0])
@@ -351,9 +376,9 @@ class _Client():
 
 
         if self.psk and self.clientID:
-            self.sendSetup(0, 1, struct.pack("<B",self.cipher.id)+self.clientID+self.challenge)
+            self.sendNonceRequest()
         elif self.keypair:
-            self.sendSetup(0, 1, struct.pack("<B",self.cipher.id)+self.clientID+self.challenge)
+            self.sendNonceRequest()
 
 
         else:
@@ -364,6 +389,12 @@ class _Client():
                 time.sleep(0.05)
                 counter-=1
 
+
+    def sendNonceRequest(self):
+        if self.keypair:
+            self.sendSetup(0, 1, struct.pack("<B",self.cipher.id)+self.clientID+self.challenge+self.sessionID+self.keypair[1])
+        else:
+            self.sendSetup(0, 1, struct.pack("<B",self.cipher.id)+self.clientID+self.challenge+self.sessionID+b'\0'*32)
 
 
 
@@ -514,12 +545,12 @@ class _Client():
 
     def onMessage(self,addr,counter,opcode,data):
         #If we've recieved an ack or a call response
+        print("MEEEESSAAGGGEE", opcode, data)
         if opcode==0:
-            print(data)
+            print(data,addr)
         if opcode==2 or opcode==5:
             #Get the message number it's an ack for
             d = struct.unpack("<Q",data[:8])[0]
-
             if d in self.waitingForAck:
                 #We've seen a subscriber for that target
                 if self.waitingForAck[d].target:
@@ -592,9 +623,15 @@ class _Client():
 
     def call(self,name,data, timeout=10):
         "Call a function by it's register ID"
-        return self._call(name,data,timeout)
+        for i in range(16):
+            try:
+                return self._call(name,data,timeout/16)
+            except NoResponseError:
+                pass
+        raise NoResponseError("Server did not respond")
 
-    def _call(self, name, data, timeout = 10):
+
+    def _call(self, name, data, timeout = 10, idempotent=True):
         with self.lock:
             self.counter+=1
             counter = self.counter
@@ -602,28 +639,19 @@ class _Client():
 
         w = ReturnChannel()
         self.waitingForAck[counter] =w
-        
         self.send(counter, 4, struct.pack("<H",name)+data)
 
-        x = 0.003
-        ctr = 24
-        time.sleep(x)
-
         q = w.queue
-        
-        while ctr and q.empty():
-            x=min(1, x*1.1)
-            ctr-=1
-            time.sleep(x)
-            self.send(counter, 4, struct.pack("<H",name)+data)
 
-        if q.empty():
-            raise RuntimeError("Server did not respond")
-        
-        d = q.get()
+        try:
+            d = q.get(True,timeout)
+        except:
+            del self.waitingForAck[counter]
+            raise NoResponseError("Server did not respond")
+        del self.waitingForAck[counter]
         returncode = struct.unpack("<H",d[:2])[0]
         if  returncode >0:
-            raise RuntimeError("Error code "+str(returncode)+d[2:].decode("utf-8","backslashreplace"))
+            raise rerrs.get(returncode,RemoteError)("Error code "+str(returncode)+d[2:].decode("utf-8","backslashreplace"))
         return d[2:]
 
 
@@ -653,7 +681,72 @@ class Client():
 
     def close(self):
         self.client.close()    
-       
+
+
+    def listDir(self, path, start=0):
+        "List dir size on remote, starting at the nth file, because of limited message size."
+        path = path.encode("utf8")
+        return(self.call(14, struct.pack("<H",start)+path))
+
+
+
+    def uploadFile(self, localName, remoteName):
+        with open(localName) as f:
+            self.writeFile(remoteName, f.read(),0, truncate=True)
+    
+    def deleteFile(self, fileName):
+        "Delete a file on the remote device"
+        fileName = fileName.encode("utf8")
+        self.call(13, fileName)
+
+
+    def writeFile(self, fileName, data, pos=0, truncate = False):
+        if isinstance(data, str):
+            data = data.encode("utf8")
+        if isinstance(fileName, str):
+            fileName = fileName.encode("utf8")
+    
+        first = True
+        while data:
+            d = data[:1024]
+            x = struct.pack("<IH", pos, len(d))
+            x+=d
+            x+= fileName
+            print(x)
+            if first and truncate:
+                self.call(11,x)
+                print("writ")
+                first = False
+            else:
+                self.call(12,x)
+                print("writ")
+            data = data[1024:]
+            pos +=1024
+    
+    def readFile(self, fileName,pos=1025,maxbytes=1024000):
+        r=b''
+        while 1:
+            x = struct.pack("<IH", pos, min(1024,maxbytes))
+            x+= fileName.encode("utf-8")
+            d =self.call(10,x)
+            pos+= len(d)
+            r+=d
+            if not d:
+                return(r)    
+    def getFunctionName(self,idx):
+        return self.call(1,struct.pack("<B",idx)).decode('utf8', errors='ignore')
+
+
+    def analogRead(self,pin):
+        return struct.unpack("<i",self.call(23,struct.pack("<B",pin)))[0]
+
+
+    def digitalRead(self,pin):
+        return struct.unpack("<B",self.call(21,struct.pack("<B",pin)))[0]
+
+    def pinMode(self,pin,mode):
+        return self.call(20,struct.pack("<BB",pin,mode))
+
 
     def call(self,function,data=b''):
         return self.client.call(function, data)

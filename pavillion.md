@@ -44,7 +44,7 @@ counter.
 ### Packet Types
 
 #### 1: Reliable Message
-Represents an MQTT or XMPP message with a name sent to a target(Akin to a topic).
+Represents an MQTT or XMPP message with a name sent to a target(Akin to a topic). Message topics beginning with "core." are reserved.
 
 Data area format:
 
@@ -173,6 +173,110 @@ compatibility is needed.
 
 
 
+
+## Reserved RPC Calls
+
+Low-numbered RPC calls are reserved so that a set of standard calls can be defined. The currently defined ones are as follows:
+
+### 0: Echo
+
+This call should always return exactly the argument string, to facillitate testing.
+
+### 1: WhatIs
+This call should return the name of the function number given as a 2 byte int in the argument string. Future versions may define additional
+content after a newline, which must be ignored by devices that don't understand it. If there is no RPC call defined at that index, this function must return an empty string.
+
+### 2: Read
+Read from
+### 3: Write
+The argument string should be input to the server's "Standard input", whatever that means for this particular server.
+
+### 5: PavTime
+This function must accept a 64 bit number followed by a 32 byte one, the tx time and tx time nanoseconds, and return a PTime packet:
+
+Tx u64
+Tx_nano u32
+Rx u64
+Rx_nano u32
+Max_error u32
+
+
+Times should be in unix time. Max error is the maximum error that the server thinks could possibly be in the Rx_time, in microseconds,
+
+
+
+### 6: Status
+
+This function should return the contents of the server's "status page" which should be a newline separated list of "status codes" or phrases in valid UTF-8, in any format. It can also contain basic info about the manufaturer.
+
+### 7: Server Identity
+Must return a 16 byte vendor UUID, a 16 byte product ID, and a 16 byte serial number, followed by a UTF-8 name.
+
+
+
+
+### 10: File Read
+Arg str: [u32 position, u16 max_bytes, utf-8 unterminated remainder filepath]
+Return up to max_bytes bytes of data starting at position in the given file. Devices should use a Linux-like
+virtual file system where sd cards, internal flash, etc, share one namespace.
+
+
+### 11: File Write
+Arg str: [u16 len, u8[len] data, u8[remainder] name]
+
+Write to the given file starting at 0, truncating the file if it exists and
+creating if it does not.
+
+The function must return the actual length of data written as a 2 byte int.
+
+
+### 12 FileWriteInto
+Arg str: [u32 position, u16 len, u8[len] data, u8[remainder] name]
+Write into an existing file at position, Position may point to one byte past the end of file to append.
+
+### 13: Delete
+Arg str is simply an unterminated file path. Return an empty string if the file was deleted or did not exist.
+
+### 14: List
+Arg str is a u16 followed by an unterminated filename. Return as many dir entries as possible starting at n.
+
+Entries are a filename, prefixed by a one byte typecode and separated by nulls. 1=file, 2=dir.
+
+### 20: pinMode
+Takes 2 bytes, the first being a pin number and the second being a "mode", where that mode has bits with the following meanings:
+1: Output enable
+2: Pullup
+4: pulldown
+8: strong pullup
+16: strong pulldown
+32: Open collector only if 1
+64: LSB drive strength
+128: MSB drive strength
+
+
+0 corresponds to INPUT, 139 corresponds to OUTPUT, and 3 corresponds to INPUT_PULLUP on arduino.
+
+### 21: digitalRead(pin)
+Must return 1 byte, with a 1 or zero depending on the pin state.
+
+### 22: pwmWrite(pin, state)
+call with 255 to set a pin high, 0 to set low, and anything else to trigger PWM mode.
+
+### 23: analogRead(pin)
+Returns a 4 byte signed number that is the digital value.
+
+
+
+## Error codes
+
+
+### 1: Error
+
+### 2: Nonexistant function
+
+### 3: Bad input
+
+### 4: File does not exist
 
 
 ## Notes

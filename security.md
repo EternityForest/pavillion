@@ -33,6 +33,25 @@ This protocol does not intend to provide forward secrecy. A session key compromi
 
 ## security setup process
 
+
+
+
+## Summary
+
+The client sends a challenge response containing a 16 byte random value, and it's client ID, and the selected cipher.
+
+The server sends a challenge response containing the server's nonce, signed with the appropriate key for that client.
+The client records this nonce, and no longer accepts it in challenge responses,
+to avoid replay attacks.
+
+The client now knows that nonce goes to a trusted server. It sends an info packet signed with the PSK containing the nonce, which functions as the server's challenge. This packet also contains the client nonce, which unlike the server's is per-session and doesn't change until the client reboots.
+
+The info packet also contains the clients counter value, and the server does not accept packets older than this after setup.
+
+The client sends using a key derived from the PSK and it's nonce, meaning that if there are multiple servers listening on a multicast port, they can use the same key to recieve data.
+
+The server's key is additionally derived from the server's nonce. Only one response per server nonce is allowed. Because of this, servers must be able to track multiple sessions with different nonces, or else there may be issues with multiple clients trying to connect.
+
 ### Nonce Request(Client to server, Security opcode 1)
 When a client wants to send a message to a server, it first sends a Nonce Request, which is simply
 a message with counter 0 followed by a single 1 byte as the opcode, then the client's 1 byte cipher number, then the client's 16 byte Client ID, then a 16 byte challenge. Servers recieving this should reply with a PSK Nonce if the cipher number specifies PSK encryption,
