@@ -533,7 +533,6 @@ class _Client():
 
     def onMessage(self,addr,counter,opcode,data):
         #If we've recieved an ack or a call response
-        print("op", opcode)
         if opcode==0:
             print(data,addr)
         if opcode==2 or opcode==5:
@@ -553,6 +552,7 @@ class _Client():
 
         #Handle S->C messages
         if  opcode==1:
+            print(data)
             d = data.split(b'\n',2)
             print(d)
             #If we have a listener for that message target
