@@ -1,7 +1,10 @@
 
 import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback,queue,libnacl
 
-from .common import nonce_from_number,pavillion_logger,DEFAULT_PORT,DEFAULT_MCAST_ADDR,ciphers,MAX_RETRIES
+
+from typing import Sequence, Optional, Tuple
+
+from .common import nonce_from_number,pavillion_logger,DEFAULT_PORT,DEFAULT_MCAST_ADDR,ciphers,MAX_RETRIES,preprocessKey
 from . import common
 
 
@@ -40,29 +43,6 @@ def is_multicast(addr):
 import queue
 
 
-class ReturnChannel():
-    def __init__(self,q=None):
-        self.queue = q or queue.Queue(64)
-        #It's not a message target thing
-        self.target = None
-    
-    def onResponse(self,data):
-        self.queue.put(data,True,3)
-
-class ExpectedAckCounter():
-    #TODO track specific servers
-    def __init__(self,e,counter):
-        self.e = e
-        self.counter = counter
-        self.target = None
-
-    def onResponse(self, data):
-        self.counter-=1
-        if not self.counter:
-            self.e.set()
-
-
-
 
 class _RemoteServer():
     """This class is used to keep track of the remote servers.
@@ -75,6 +55,9 @@ class _RemoteServer():
 
 
     def __init__(self,clientObject):
+
+        #This is set on the first incoming message.
+        #We trust it because we know it could not have been older than the key exchange
         self.server_counter = 0
         self.clientObject = clientObject
 
@@ -96,7 +79,7 @@ class _RemoteServer():
         #Or activity from the server that is encrypted.
         self.secure_lastused = time.time()
 
-    def sendSetup(self, counter, opcode, data,addr=None):
+    def sendSetup(self, counter: int, opcode: int, data: bytes ,addr=None):
         "Send an unsecured packet"
         m = struct.pack("<Q",counter)+struct.pack("<B",opcode)+data
         self.clientObject.sock.sendto(b"PavillionS0"+m, self.clientObject.server_address)
@@ -109,7 +92,7 @@ class _RemoteServer():
             self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.clientObject.challenge+self.clientObject.sessionID+b'\0'*32)
 
 
-    def onRawMessage(self, msg,addr):
+    def onRawMessage(self, msg: bytes ,addr: tuple):
         self.lastused = time.time()
         s = b"PavillionS0"
         clientobj = self.clientObject
@@ -125,14 +108,12 @@ class _RemoteServer():
                     try:
                         msg2 = clientobj.cipher.decrypt(msg[8:], self.skey,nonce_from_number(counter))
                     except Exception as e:
-                        print("baaad",self.skey)
                         #MOst of the time this is going to be not something we can do anything about.
                         return
 
 
-                    #Duplicate protection
+                    #Duplicate protection. 
                     if self.server_counter>=counter:
-                        print("dupe")
                         pavillion_logger.debug("Duplicate Pavillion")
                         return
                     self.server_counter = counter
@@ -146,7 +127,6 @@ class _RemoteServer():
                 #We don't know how to process this message. So we send
                 #a nonce request to the server
                 else:
-                    pavillion_logger.debug("uks")
                     pavillion_logger.warning("Recieved packet from unknown server, attempting setup")
                     self.sendNonceRequest()
 
@@ -157,11 +137,10 @@ class _RemoteServer():
                 #Message 4 is an "Unrecognized Client" message telling us to redo the whole auth process.
                 #Send a nonce request.
                 if opcode==4:
-                    print("unrecognonized")
                     self.sendNonceRequest()
                 
                 if opcode==7:
-                    print("scl",msg)
+                    pass
         
                 if opcode==6:
                     if data==self.challenge:
@@ -173,7 +152,6 @@ class _RemoteServer():
 
 
                 if opcode==2:
-                    print("got opcode 2")
                     if clientobj.psk:
                         with clientobj.challengelock:
                             servernonce,challenge,h = struct.unpack("<32s16s32s",data)
@@ -188,23 +166,28 @@ class _RemoteServer():
                                 clientobj.challenge = os.urandom(16)
                                 clientobj.lastChangedChallenge = time.time()
 
-                            if servernonce in clientobj.usedServerNonces:
-                                return
 
                             if clientobj.cipher.keyedhash(servernonce+challenge,clientobj.psk)==h:
                                     #We can accept more than one response per challenge, but each particular
                                     #is only usable once
-                                    clientobj.usedServerNonces[servernonce] = True
                                     dbg("valid hash",addr)
                 
                                     #send client info
                                     m = struct.pack("<B16s32s32sQ",clientobj.cipher.id,clientobj.clientID,clientobj.nonce,servernonce,clientobj.counter)
                                     clientobj.counter +=3
-                                    v = clientobj.cipher.keyedhash(m,clientobj.psk)
-                                    self.skey = clientobj.cipher.keyedhash(clientobj.nonce+servernonce,clientobj.psk)
-                                    self.sessionID = clientobj.cipher.keyedhash(clientobj.key, servernonce)[:16]
-
+                                    v = clientobj.cipher.keyedhash(m,clientobj.psk) 
+                                    #Send the message even with used nonces, but only change state for new ones.
                                     self.sendSetup(0, 3, m+v,addr=addr)
+                                    
+
+                                    if servernonce in clientobj.usedServerNonces:
+                                        dbg("already used that nonce,bye")
+                                        return
+                                    
+                                    clientobj.usedServerNonces[servernonce] = True
+                                    self.skey = clientobj.cipher.keyedhash(clientobj.nonce+servernonce,clientobj.psk)
+                                    self.server_counter =0
+                                    self.sessionID = clientobj.cipher.keyedhash(clientobj.key, servernonce)[:16]
 
                             else:
                                 dbg(servernonce+challenge,clientobj.psk)
@@ -226,7 +209,7 @@ class _RemoteServer():
                         #Send an ECC Client Info
                         p = struct.pack("<32s32s32sQ",servernonce, clientobj.key, self.skey,clientobj.counter)
                         p = clientobj.cipher.pubkey_encrypt(p, n,clientobj.server_pubkey,clientobj.keypair[1])
-                        self.sendSetup(0, 12, m+n+p,addr=addr)
+                        self.sendSetup(0, 12, clientobj.clientID+m+n+p,addr=addr)
 
 
 
@@ -253,7 +236,7 @@ class _RemoteServer():
             logging.warning("Bad header "+str(msg))
 
 class _Client():
-    def __init__(self, address=('255.255.255.255',DEFAULT_PORT),clientID=None,psk=None,cipher=1,server=None,keypair=None, serverkey=None, handle=None):
+    def __init__(self, address:Tuple[str,int]=('255.255.255.255',DEFAULT_PORT),clientID=None,psk=None,cipher=1,server=None,keypair=None, serverkey=None, handle=None):
         "Represents a Pavillion client that can both initiate and respond to requests"
         #The address of our associated server
         self.server_address = address
@@ -270,11 +253,14 @@ class _Client():
         #Clients can be associated with a server
         self.server = server
 
+        psk = preprocessKey(psk)
         self.psk = psk
         self.clientID = clientID
 
         self.lastChangedChallenge = time.time()
         self.challengelock = threading.Lock()
+        self.targetslock = threading.Lock()
+        self.lock = threading.Lock()
         self.nonce = os.urandom(32)
         self.challenge = os.urandom(16)
         self.usedServerNonces = {}
@@ -290,7 +276,8 @@ class _Client():
         self._keepalive_times = {}
 
         self.skey = None
-      
+        self.messageTargets = {}
+
         if self.keypair == "guest":
             self.keypair = libnacl.crypto_box_keypair()
 
@@ -376,10 +363,11 @@ class _Client():
 
 
         if self.psk and self.clientID:
+            pass
             self.sendNonceRequest()
         elif self.keypair:
             self.sendNonceRequest()
-
+            pass
 
         else:
             self.synced = False
@@ -545,7 +533,7 @@ class _Client():
 
     def onMessage(self,addr,counter,opcode,data):
         #If we've recieved an ack or a call response
-        print("MEEEESSAAGGGEE", opcode, data)
+        print("op", opcode)
         if opcode==0:
             print(data,addr)
         if opcode==2 or opcode==5:
@@ -562,6 +550,29 @@ class _Client():
                 except Exception:
                     print(traceback.format_exc(6))
                     pass
+
+        #Handle S->C messages
+        if  opcode==1:
+            d = data.split(b'\n',2)
+            print(d)
+            #If we have a listener for that message target
+            if d[0].decode('utf-8') in self.messageTargets:
+
+                #No counter race conditions allowed
+                with self.lock:
+                    #Do an acknowledgement
+                    self.counter += 1
+                    self.send(self.counter,2,struct.pack("<Q",counter))
+
+
+                s = self.messageTargets[d[0].decode('utf-8')]
+                with self.targetslock:
+                    for i in s:
+                        i = i()
+                        if not i:
+                            continue
+                        i.callback(d[1].decode('utf-8') ,d[2],addr)
+
 
     #Call this with addr, target when you get an ACK from a packet you sent
     #It uses a lock so it's probably really slow, but that's fine because
@@ -595,7 +606,7 @@ class _Client():
                 expected = 1
 
             e = threading.Event()
-            w = ExpectedAckCounter(e,expected)
+            w = common.ExpectedAckCounter(e,expected)
             w.target = target
             self.waitingForAck[counter] =w
         
@@ -637,7 +648,7 @@ class _Client():
             counter = self.counter
 
 
-        w = ReturnChannel()
+        w = common.ReturnChannel()
         self.waitingForAck[counter] =w
         self.send(counter, 4, struct.pack("<H",name)+data)
 
@@ -655,6 +666,25 @@ class _Client():
         return d[2:]
 
 
+    def messageTarget(self,target,callback):
+        m = common.MessageTarget(target,callback)
+        with self.targetslock:
+            self.cleanupTargets()
+            if not target in self.messageTargets:
+                self.messageTargets[target]=[]
+            self.messageTargets[target].append(weakref.ref(m))
+        return m
+
+
+    def cleanupTargets(self):
+        for i in self.messageTargets:
+                j = self.messageTargets[i]
+                for k in j:
+                    if not k():
+                        j.remove(k)
+                if not self.messageTargets[i]:
+                    del self.messageTargets[i]
+
 
 
 class Client():
@@ -663,11 +693,10 @@ class Client():
         self.client= _Client(address,clientID,psk,cipher=cipher, server=server,keypair=keypair,serverkey=serverkey,handle=self)
         self.clientID = clientID
         self.knownSubscribers = self.client.knownSubscribers
-        if psk and not isinstance(psk,bytes):
-            raise TypeError("PSK must be bytes")
-        
-      
 
+      
+    def messageTarget(self,target,callback):
+        return self.client.messageTarget(target, callback)
     @property
     def address(self):
         return self.client.sock.getsockname()
@@ -712,18 +741,15 @@ class Client():
             x = struct.pack("<IH", pos, len(d))
             x+=d
             x+= fileName
-            print(x)
             if first and truncate:
                 self.call(11,x)
-                print("writ")
                 first = False
             else:
                 self.call(12,x)
-                print("writ")
             data = data[1024:]
             pos +=1024
     
-    def readFile(self, fileName,pos=1025,maxbytes=1024000):
+    def readFile(self, fileName,pos=0,maxbytes=1024000):
         r=b''
         while 1:
             x = struct.pack("<IH", pos, min(1024,maxbytes))

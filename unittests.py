@@ -123,6 +123,55 @@ if __name__ == '__main__':
             finally:
                 c.close()
 
+        def test_pubkey__reverse_coms(self):
+            "Create a client and server, send a message from server to client"
+            try:
+                c_pub, c_pk = libnacl.crypto_box_keypair()
+
+                s_pub, s_pk = libnacl.crypto_box_keypair()
+                
+                cid2 = b'cid2'*4
+
+                #Servers identify clients by client id and key pairs.
+                s = Server(pubkeys={cid2:c_pub}, ecc_keypair=(s_pub,s_pk))
+
+                self.assertEqual(len(detected_subs),0)                
+                c = ClientClass(keypair=(c_pub,c_pk), serverkey=s_pub, clientID=cid2,cipher=2)
+
+                time.sleep(0.5)
+
+                incoming = []
+
+                #The ID of the client will be None if the message is sent unsecured.
+                def z(name,data,client):
+                    incoming.append((name,data,client))
+
+                m = c.messageTarget('TestTarget',z)
+
+                s.sendMessage("TestTarget","MessageName",b'data')
+                
+                start = time.time()
+                while(not incoming):
+                    time.sleep(0.1)
+                    if start<time.time()-5:
+                        raise RuntimeError("Timed Out")
+
+                self.assertEqual(incoming[0],("MessageName",b'data',incoming[0][2]))
+
+                #Assert once and only once
+                self.assertEqual(len(incoming),1)
+                incoming.pop()
+
+
+                del s
+                time.sleep(1)
+                c.sendMessage("TestTarget","MessageName",b'data')
+
+                #Assert that the server can be cleaned up by the usual weakref methods
+                self.assertEqual(len(incoming),0)
+
+            finally:
+                c.close()
 
         def test_coms(self):
             "Create a client and server, send a message from client to server"

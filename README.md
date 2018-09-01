@@ -49,7 +49,8 @@ x = c.call(401, b'A test string')
 self.assertEqual(x, b'A test string')
 ```
 ### Publish subscribe
-Client and server objects are all-in-one, and support multiple communication modes.
+Client and server objects are all-in-one, and support multiple communication modes, and messages may be send client to server
+or server to client.
 
 In addition, the rest of the API is the same for PSK as it is for public key.
 ```
@@ -60,6 +61,19 @@ In addition, the rest of the API is the same for PSK as it is for public key.
 
     m = s.messageTarget('TestTarget',f)
     c.sendMessage("TestTarget","MessageName",b'data')
+ 
+
+    #Same as above, but sending from client to server.
+    #In this mode, We can optionally send to only a subset of clients with the optional filter
+    #that we can pass as a last param to sendMessage.
+
+    #Filter must be an iterable. The client is included if either it's Id or (addr,port) are in the iterable.
+    def ff(name,data,addr):
+       print(name,data,addr)
+
+    m = c.messageTarget('TestTarget',ff)
+    s.sendMessage("TestTarget","MessageName",b'data')
+
 
 ```
 

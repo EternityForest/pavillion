@@ -14,6 +14,9 @@ Remember every node must process every message on the chosen multicast group, so
 Port numbers remain the same if security is used.
 
 
+The Server may listen on a multicast port, but should send all replies as unicast from a randomly-selected port. This allows
+cliets to tell multiple servers on one machine apart. Server-initiated messages should always be unicast.
+
 
 ## Nodes
 
@@ -175,8 +178,7 @@ compatibility is needed.
 
 
 ## Reserved RPC Calls
-
-Low-numbered RPC calls are reserved so that a set of standard calls can be defined. The currently defined ones are as follows:
+The first 4096 calls are reserved so that a set of standard calls can be defined. The currently defined ones are as follows:
 
 ### 0: Echo
 
@@ -212,6 +214,21 @@ This function should return the contents of the server's "status page" which sho
 ### 7: Server Identity
 Must return a 16 byte vendor UUID, a 16 byte product ID, and a 16 byte serial number, followed by a UTF-8 name.
 
+### 8: Server Descriptors
+Must return a UTF-8 string, which is formatted as a set of single-line descriptors beginning with an name followed by an argument
+string, which is to be interpreted according to the name. A descriptor is a simple way of signalling a small amount of data, such as
+a capability, a supported file type, etc, to the server.
+
+Names beginning with "core." or any non-alphabetical character are reserved.
+
+Example:
+
+`com.examplecorp.voltmeter -300 1000`
+
+Might be interpreted by one who knows what "com.examplecorp.voltmeter" is, to indivate that the device can measure between -300
+and 1000 volts.
+
+Names should generally be DNS based or be UUIDs, to ensure uniqueness. Names may not contain specian chars except "-" and ".".
 
 
 
@@ -238,7 +255,7 @@ Write into an existing file at position, Position may point to one byte past the
 Arg str is simply an unterminated file path. Return an empty string if the file was deleted or did not exist.
 
 ### 14: List
-Arg str is a u16 followed by an unterminated filename. Return as many dir entries as possible starting at n.
+Arg str is a u16 followed by an unterminated filename. Return as many dir entries as possible starting at the nth entry.
 
 Entries are a filename, prefixed by a one byte typecode and separated by nulls. 1=file, 2=dir.
 
@@ -278,28 +295,3 @@ Returns a 4 byte signed number that is the digital value.
 
 ### 4: File does not exist
 
-
-## Notes
-
-How should the alarm protocol work? Should that be a separate thing where we multicast alarms and also ask hey what alarms do you have?
-
-Do we need signed messages? That have a Pubkey signature?
-
-Or do we just need authenticated messages?
-
-Or maybe we don't need any kind of authentication for these alarm messages.
-
-
-An Alarm is multicast on the bus using secure or insecure messaging. It contains:
-
-An Alarm ID
-A state(A 16 bit number of seconds with 65536 special and meaning normal)
-An alarm name
-An 8 bit priority number
-A description
-
-Priority and description can be changed even after an alarm becomes active.
-
-To cancel an alarm, resend it in state 65536
-
-To send alarms in the "tripped but not yet active" state, send a number of seconds till it should activate
