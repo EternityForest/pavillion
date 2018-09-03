@@ -135,8 +135,7 @@ if __name__ == '__main__':
                 #Servers identify clients by client id and key pairs.
                 s = Server(pubkeys={cid2:c_pub}, ecc_keypair=(s_pub,s_pk))
 
-                self.assertEqual(len(detected_subs),0)                
-                c = ClientClass(keypair=(c_pub,c_pk), serverkey=s_pub, clientID=cid2,cipher=2)
+                c = Client(keypair=(c_pub,c_pk), serverkey=s_pub, clientID=cid2,cipher=2)
 
                 time.sleep(0.5)
 

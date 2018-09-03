@@ -241,6 +241,12 @@ class _Client():
         #The address of our associated server
         self.server_address = address
 
+        #The default timeout.
+        self.timeout = 2
+
+        #Used for optimizing the response timing
+        self.fastestOverallCallResponse = 0.002
+
         #Our message counter
         self.counter = random.randint(1024,1000000000)
         self.server_counter = 0
@@ -350,6 +356,7 @@ class _Client():
 
 
         t = threading.Thread(target=self.loop)
+        t.daemon = True
         t.name+=":PavillionClient"
 
         t.start()
@@ -632,33 +639,54 @@ class _Client():
         else:
             return
 
-    def call(self,name,data, timeout=10):
+    def call(self,name,data, timeout=None):
         "Call a function by it's register ID"
-        for i in range(16):
+        delay = self.fastestOverallCallResponse *1.3
+        timeout = timeout or self.timeout
+        start = time.time()
+        callset = []
+        while time.time()-start<timeout:
             try:
-                return self._call(name,data,timeout/16)
+                x= self._call(name,data,delay,callset)
+                self.fastestOverallCallResponse = min(self.fastestOverallCallResponse,time.time()-start)
+                #It creeps up if not smashed back down to account for changing delays
+                self.fastestOverallCallResponse += 0.0005
+                return x
             except NoResponseError:
+                delay*=2
                 pass
         raise NoResponseError("Server did not respond")
 
 
-    def _call(self, name, data, timeout = 10, idempotent=True):
+    def _call(self, name, data, timeout = None, idempotent=True, callset=None):
         with self.lock:
             self.counter+=1
             counter = self.counter
-
+        timeout = timeout or self.timeout
 
         w = common.ReturnChannel()
+        if callset:
+            callset.append(w.queue)
         self.waitingForAck[counter] =w
         self.send(counter, 4, struct.pack("<H",name)+data)
 
         q = w.queue
 
+        #The callset feature lets us check all earlier calls in the same set of attempts,
+        #by passing it a list that is reused for all calls.
+        d =None
         try:
             d = q.get(True,timeout)
         except:
-            del self.waitingForAck[counter]
+            if callset:
+                for i in reversed(callset):
+                    if not i.empty():
+                        d = i.get(False)
+                        break
+        if d==None:
             raise NoResponseError("Server did not respond")
+
+
         del self.waitingForAck[counter]
         returncode = struct.unpack("<H",d[:2])[0]
         if  returncode >0:
@@ -711,7 +739,11 @@ class Client():
     def close(self):
         self.client.close()    
 
-
+    def __del__(self):
+        try:
+            self.client.close()
+        except:
+            pass
     def listDir(self, path, start=0):
         "List dir size on remote, starting at the nth file, because of limited message size."
         path = path.encode("utf8")
