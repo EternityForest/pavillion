@@ -16,6 +16,24 @@ Port numbers remain the same if security is used.
 
 The Server may listen on a multicast port, but should send all replies as unicast from a randomly-selected port. This allows
 cliets to tell multiple servers on one machine apart. Server-initiated messages should always be unicast.
+Pavillion is a UDP based protocol that provides reliable multicast messaging and RPC calls. 
+
+By default, Port 1783 should be used general application traffic, and 2221 should be used for low data rate system status messages.
+
+For multicasting, general application traffic by default should use 239.255.28.12 and low rate system messages should use 239.255.28.18
+
+Chat messages between humans should use an application-specific port.
+
+Remember every node must process every message on the chosen multicast group, so you may need to divide the space into multiples.
+
+Port numbers remain the same if security is used.
+
+
+The Server may listen on a multicast port, but should send all replies as unicast from a randomly-selected port. This allows
+cliets to tell multiple servers on one machine apart. Server-initiated messages should always be unicast.
+
+This means that clients must accept responses from any port on the server. This would normally be terrible for security,
+but pavillion is mostly meant to be used with it's encryption layer.
 
 
 ## Nodes

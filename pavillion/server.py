@@ -13,7 +13,7 @@
 #You should have received a copy of the GNU General Public License
 #along with Pavillion.  If not, see <http://www.gnu.org/licenses/>.
 
-import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback
+import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback,select
 
 from .common import ciphers,DEFAULT_MCAST_ADDR,DEFAULT_PORT,nonce_from_number,pavillion_logger,preprocessKey
 from . import common
@@ -74,14 +74,14 @@ class _ServerClient():
     def sendSetup(self, counter, opcode, data):
         "Send an unsecured packet"
         m = struct.pack("<Q",counter)+struct.pack("<B",opcode)+data
-        self.server.sock.sendto(b"PavillionS0"+m,self.address)
+        self.server.sendsock.sendto(b"PavillionS0"+m,self.address)
 
     def sendSecure(self, counter, opcode, data):
         "Send a secured packet"
         n = b'\x00'*(24-8)+struct.pack("<Q",counter)
         m = struct.pack("<B",opcode)+data
         m=self.encrypt(m,self.skey,n)
-        self.server.sock.sendto(b"PavillionS0"+struct.pack("<Q",counter)+m,self.address)
+        self.server.sendsock.sendto(b"PavillionS0"+struct.pack("<Q",counter)+m,self.address)
 
     def send(self, counter, opcode, data):
         #No risk of accidentally responding to a secure message with a plaintext one.
@@ -310,6 +310,7 @@ class _Server():
 
         self.sendsock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sendsock.bind((self.address[0],0))
+        self.sendsock.settimeout(1)
 
         self.mcastgroup = multicast
         #Subscribe to any requested mcast group
@@ -346,6 +347,8 @@ class _Server():
         t = threading.Thread(target=self.loop)
         t.name+=":PavillionServer"
         t.start()
+
+        
 
 
 
@@ -432,6 +435,7 @@ class _Server():
                     time.sleep(x)
                     if e.wait(x):
                         return
+                    print("jiwiav", counter)
                     self.broadcast(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data,filt)
             if reliable:
                 #Return how many subscribers definitely recieved the message.
@@ -474,6 +478,11 @@ class _Server():
                         if not i:
                             continue
                         i.callback(d[1].decode('utf-8') ,d[2],clientID)
+        
+        elif opcode ==2:
+            d = struct.unpack("<Q",data)[0]
+            if d in self.waitingForAck:
+                self.waitingForAck[d].onResponse(data[8:])
 
         #Unreliable message, don't ack
         elif  opcode==3:
@@ -512,7 +521,7 @@ class _Server():
             except:
                 logging.exception("error closing connection")
                     
-    def _cleanupSessions():
+    def _cleanupSessions(self):
         torm=[]
         for i in sorted(list(self.knownclients.items()),key=lambda x: x[1].created):
             if i[1].lastSeen < time.time()-SESSION_TIMEOUT:
@@ -522,13 +531,38 @@ class _Server():
             break
 
     def loop(self):
+
+        #If we are in multicast mode, when we first start up, send some
+        #unrecognized client announcements in hopes that someone notices us
+        #This is why clients are supposed to listen on any multicast grops they send on.
+
+        #We don't know if anyone is listening so we can't retry, so we send 3 times and hope at least
+        #one gets through.
+
+        #This is just an optimization, the client can also initiate the connection
+        if self.mcastgroup:
+            m = struct.pack("<Q",0)+struct.pack("<B",4)+b''
+            self.sendsock.sendto(b"PavillionS0"+m,(self.mcastgroup,self.port))
+            time.sleep(0.003)
+            self.sendsock.sendto(b"PavillionS0"+m,(self.mcastgroup,self.port))
+            time.sleep(0.025)
+            self.sendsock.sendto(b"PavillionS0"+m,(self.mcastgroup,self.port))
+
         while(self.running):
             try:
-                m,addr = self.sock.recvfrom(4096)
-            except socket.timeout:
+            #TODO: We need to poll the sendsock here
+                r,w,x= select.select([self.sock,self.sendsock],[],[],5)
+            except:
                 continue
-            if addr in self.ignore:
-                continue
+            for i in r:
+                try:
+                    m,addr = i.recvfrom(4096)
+                except socket.timeout:
+                    continue
+                except:
+                    print(traceback.format_exc())
+                if addr in self.ignore:
+                    continue
 
             #There's a possibility of dropped packets in a race condition between getting rid of
             #and remaking a server. It doesn't matter, UDP is unreliable anyway
@@ -550,6 +584,10 @@ class _Server():
 
         #Close sock at end
         self.sock.close()
+        try:
+            self.sendsock.close()
+        except:
+            pass
 
 
 class Server():

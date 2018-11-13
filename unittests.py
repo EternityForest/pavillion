@@ -147,7 +147,7 @@ if __name__ == '__main__':
 
                 m = c.messageTarget('TestTarget',z)
 
-                s.sendMessage("TestTarget","MessageName",b'data')
+                s.sendMessage("TestTarget","MessageName",b'data_pubkeyreversecoms')
                 
                 start = time.time()
                 while(not incoming):
@@ -155,7 +155,7 @@ if __name__ == '__main__':
                     if start<time.time()-5:
                         raise RuntimeError("Timed Out")
 
-                self.assertEqual(incoming[0],("MessageName",b'data',incoming[0][2]))
+                self.assertEqual(incoming[0],("MessageName",b'data_pubkeyreversecoms',incoming[0][2]))
 
                 #Assert once and only once
                 self.assertEqual(len(incoming),1)

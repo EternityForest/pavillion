@@ -77,6 +77,12 @@ In addition, the rest of the API is the same for PSK as it is for public key.
 
 ```
 
+## Client Objects
+Incomplete docs
+
+### c.messageTarget(target, f)
+Returns a messageTarget obj you must keep a ref to, along with the function itself. As long as those exist, incoming messages will cause f(name, data, addr) to be called.
+
 ## Client-Server model
 
 Pavillion uses a traditional client-server model, except that clients and servers may share a port. With a few exceptions, only a client can initiate a request, and only a server may respond to or act on a request. This includes reliable and unreliable multicasting modes.

@@ -1,5 +1,5 @@
 
-import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback,queue,libnacl
+import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback,queue,libnacl,select
 
 
 from typing import Sequence, Optional, Tuple
@@ -100,7 +100,6 @@ class _RemoteServer():
         if msg.startswith(s):
             msg=msg[len(s):]
             counter = struct.unpack("<Q",msg[:8])[0]
-        
 
             #Normal Pavillion, pass through to application layer
             if counter:
@@ -110,7 +109,22 @@ class _RemoteServer():
                     except Exception as e:
                         #MOst of the time this is going to be not something we can do anything about.
                         return
+                               
+                    opcode =msg2[0]
+                    data=msg2[1:]
 
+
+                    #acknowlegement happens even for old messages, so long as they aren't too old.
+                    #That's why we do them here in this section.
+                    #We do this because if the ack gets lost they shouldn't just resend till it times out.
+                    if opcode == 1:
+                        if self.server_counter<(counter+250):
+                            #No counter race conditions allowed
+                            with clientobj.lock:
+                                #Do an acknowledgement. Send it unicast back where it came
+                                clientobj.counter += 1
+                                recievedcounter = clientobj.counter
+                            clientobj.send(recievedcounter,2,struct.pack("<Q",counter),addr)
 
                     #Duplicate protection. 
                     if self.server_counter>=counter:
@@ -118,9 +132,7 @@ class _RemoteServer():
                         return
                     self.server_counter = counter
 
-                                
-                    opcode =msg2[0]
-                    data=msg2[1:]
+ 
                     self.secure_lastused = time.time()
                     clientobj.onMessage(addr,counter,opcode,data)
 
@@ -189,6 +201,8 @@ class _RemoteServer():
                                     self.server_counter =0
                                     self.sessionID = clientobj.cipher.keyedhash(clientobj.key, servernonce)[:16]
 
+                                    clientobj.handle().onServerConnect(addr,None)
+
                             else:
                                 dbg(servernonce+challenge,clientobj.psk)
                                 dbg("client recieved bad challenge response hash",  clientobj.cipher.keyedhash(servernonce+challenge,clientobj.psk), h,data)
@@ -205,11 +219,13 @@ class _RemoteServer():
                         self.skey=os.urandom(32)
 
                         n=os.urandom(24)
+                        self.server_counter =0
 
                         #Send an ECC Client Info
                         p = struct.pack("<32s32s32sQ",servernonce, clientobj.key, self.skey,clientobj.counter)
                         p = clientobj.cipher.pubkey_encrypt(p, n,clientobj.server_pubkey,clientobj.keypair[1])
                         self.sendSetup(0, 12, clientobj.clientID+m+n+p,addr=addr)
+                        clientobj.handle().onServerConnect(addr,clientobj.server_pubkey)
 
 
 
@@ -245,7 +261,16 @@ class _Client():
         self.timeout = 2
 
         #Used for optimizing the response timing
-        self.fastestOverallCallResponse = 0.002
+        self.fastestOverallCallResponse = 0.05
+
+        #Average response time for each type of call we know about
+        #Listed by the RPC number
+        self.averageResponseTimes = {}
+
+
+        #Used to keeo track of the optimization where some broadcasts are converted to unicasts.
+        #We occasionally send real broadcasts for new server discovery.
+        self.lastActualBroadcast = 0
 
         #Our message counter
         self.counter = random.randint(1024,1000000000)
@@ -278,8 +303,8 @@ class _Client():
         #Known servers, indexed by (addr,port)
         self.known_servers = {}
 
-        #Last send message to each target that we have subs for
-        self._keepalive_times = {}
+        #Last sent message that was sent to the default address
+        self._keepalive_time = time.time()
 
         self.skey = None
         self.messageTargets = {}
@@ -333,7 +358,8 @@ class _Client():
             group = socket.inet_aton(address[0])
             mreq = struct.pack('4sL', group, socket.INADDR_ANY)
             self.msock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-
+        else:
+            self.msock = False
 
         
         self.running = True
@@ -360,13 +386,6 @@ class _Client():
         t.name+=":PavillionClient"
 
         t.start()
-
-        if is_multicast(address[0]):
-            t = threading.Thread(target=self.mcast_loop)
-            t.name+=":PavillionClient"
-            t.start()
-
-
 
 
         if self.psk and self.clientID:
@@ -405,6 +424,24 @@ class _Client():
                 common.cleanup_refs.append(weakref.ref(self))
 
     def send(self, counter, opcode, data,addr=None):
+        
+        ##Experimental optimization to send to the only known server most of the time if there's only one
+        #We want to send a real broadcast if we haven't done one in 3s, this is really just
+        #An optimization for if we ever send frequent bursts of data
+        
+        #Don't override the address setting though, if manually given
+
+        #TODO: decide if this is actually a good idea, and for what opcodes. ATM it doesn't work.
+        try:
+            if addr==None and len(self.known_servers)==1:
+                if 0 and self.lastActualBroadcast> time.time()-3:
+                    for i in self.known_servers:
+                        addr = i
+                else:
+                    self.lastActualBroadcast = time.time()
+        except:
+            pass
+
         if self.psk or self.keypair:
             self.sendSecure(counter,opcode,data,addr)
         else:
@@ -447,18 +484,16 @@ class _Client():
                         torm_o.append(i)
                 for i in torm_o:
                     del self.knownSubscribers[i]
-                    try:
-                        del self._keepalive_times[i]
-                    except:
-                        pass
             except:
                 pass
 
     def _doKeepAlive(self):
-        for i in self._keepalive_times:
-            if self._keepalive_times[i]<time.time()-30:
-                self.sendMessage(i,'',b'', reliable=False)
-                self._keepalive_times[i]=time.time()
+        if self._keepalive_time<time.time()-30:
+            try:
+                self.sendMessage('','',b'', reliable=False)
+            except:
+                pavillion_logger.exception("Error sending keepalive")
+            self._keepalive_time=time.time()
 
     def countBroadcastSubscribers(self,target):
         with self.subslock:
@@ -468,73 +503,52 @@ class _Client():
                 return len(self.knownSubscribers[target])
 
 
-    
-
 
     def loop(self):
         "Main loop that should always be running in a thread"
         l = time.time()
         while(self.running):
-            try:
-                msg,addr = self.sock.recvfrom(4096)
-            except socket.timeout:
-                #Send keepalive messages, remove those who have not
-                #responded for 240s, which is probably about 6 packets.
-
-                if time.time()-l>30:
-                    self._doKeepAlive()
-                    with self.subslock:
-                        self._cleanSubscribers()
-                continue
 
             try:
-                if addr in self.known_servers:
-                    self.known_servers[addr].onRawMessage(msg,addr)
+                if self.msock:
+                    r,w,x = select.select([self.sock,self.msock],[],[],5)
                 else:
-                    with self.lock:
-                        if len(self.known_servers)>self.max_servers:
-                            x = sorted(self.known_servers.values(), key=lambda x:x.secure_lastused)[0]
-
-                            if (x.secure_lastused<time.time()-300) and (x.lastused<time.time()-10):
-                                self.known_servers.remove(x.machine_addr)
-
-                        if not len(self.known_servers)>self.max_servers:
-                            self.known_servers[addr] = _RemoteServer(self)
-                            self.known_servers[addr].machine_addr = addr
-                            self.known_servers[addr].onRawMessage(msg,addr)
-
+                    r,w,x = select.select([self.sock],[],[],5)
             except:
-                logging.exception("Exception in client loop")
-     
-        #Close socket at loop end
-        self.sock.close()
-
-    def mcast_loop(self):
-        "If we are connecting to a server on a multicast server, we need this other loop to listen to traffic there"
-        while(self.running):
-            try:
-                msg,addr = self.msock.recvfrom(4096)
-            except socket.timeout:
                 continue
-            try:
-                if addr in self.known_servers:
-                    self.known_servers[addr].onRawMessage(msg,addr)
-                else:
-                    with self.lock:
-                        if len(self.known_servers)>self.max_servers:
-                            x = sorted(self.known_servers.values(), key=lambda x:x.secure_lastused)[0]
+            for sock in r:
+                try:
+                    msg,addr = sock.recvfrom(4096)
+                except socket.timeout:
+                    #Send keepalive messages, remove those who have not
+                    #responded for 240s, which is probably about 6 packets.
 
-                            if (x.secure_lastused<time.time()-300) and (x.lastused<time.time()-10):
-                                self.known_servers.remove(x.machine_addr)
+                    if time.time()-l>30:
+                        l=time.time()
+                        self._doKeepAlive()
+                        with self.subslock:
+                            self._cleanSubscribers()
+                    continue
 
-                        if not len(self.known_servers)>self.max_servers:
-                            self.known_servers[addr] = _RemoteServer(self)
-                            self.known_servers[addr].machine_addr = addr
-                            self.known_servers[addr].onRawMessage(msg,addr)
+                try:
+                    if addr in self.known_servers:
+                        self.known_servers[addr].onRawMessage(msg,addr)
+                    else:
+                        with self.lock:
+                            if len(self.known_servers)>self.max_servers:
+                                x = sorted(self.known_servers.values(), key=lambda x:x.secure_lastused)[0]
 
-            except:
-                logging.exception("Exception in client loop")
-     
+                                if (x.secure_lastused<time.time()-300) and (x.lastused<time.time()-10):
+                                    self.known_servers.remove(x.machine_addr)
+
+                            if not len(self.known_servers)>self.max_servers:
+                                self.known_servers[addr] = _RemoteServer(self)
+                                self.known_servers[addr].machine_addr = addr
+                                self.known_servers[addr].onRawMessage(msg,addr)
+
+                except:
+                    logging.exception("Exception in client loop")
+        
         #Close socket at loop end
         self.sock.close()
 
@@ -558,18 +572,26 @@ class _Client():
                     pass
 
         #Handle S->C messages
-        if  opcode==1:
-            print(data)
+        if  opcode==3:
             d = data.split(b'\n',2)
-            print(d)
             #If we have a listener for that message target
             if d[0].decode('utf-8') in self.messageTargets:
-
-                #No counter race conditions allowed
-                with self.lock:
-                    #Do an acknowledgement
-                    self.counter += 1
-                    self.send(self.counter,2,struct.pack("<Q",counter))
+                s = self.messageTargets[d[0].decode('utf-8')]
+                with self.targetslock:
+                    #Look for weakrefs that haven't expired
+                    for i in s:
+                        i = i()
+                        if not i:
+                            continue
+                        def f():
+                            i.callback(d[1].decode('utf-8') ,d[2],addr)
+                        self.handle().execute(f)
+        #Handle S->C messages. Note that we send ack even for old messges, 
+        #So we do that at a lower level.
+        if  opcode==1:
+            d = data.split(b'\n',2)
+            #If we have a listener for that message target
+            if d[0].decode('utf-8') in self.messageTargets:
 
 
                 s = self.messageTargets[d[0].decode('utf-8')]
@@ -578,8 +600,9 @@ class _Client():
                         i = i()
                         if not i:
                             continue
-                        i.callback(d[1].decode('utf-8') ,d[2],addr)
-
+                        def f():
+                            i.callback(d[1].decode('utf-8') ,d[2],addr)
+                        self.handle().execute(f)
 
     #Call this with addr, target when you get an ACK from a packet you sent
     #It uses a lock so it's probably really slow, but that's fine because
@@ -591,7 +614,7 @@ class _Client():
             if t in self.knownSubscribers:
                 x = self.knownSubscribers[t]
                 if not s in x:
-                    self.cleanSubscribers()
+                    self._cleanSubscribers()
                 x[s] = time.time()
             else:
                 self._cleanSubscribers()
@@ -604,13 +627,17 @@ class _Client():
         with self.lock:
             self.counter+=1
             counter = self.counter
-        self._keepalive_times[target]=time.time()
+        #If an address was specified, it doesn't count as a keepalive
+        #Because it might be aimed at only one of many servers on multicast
+        if addr==None:
+            self._keepalive_time=time.time()
 
         if reliable:
-            try:
-                expected = len([i for i in self.knownSubscribers[t] if i>120])
-            except:
-                expected = 1
+            with self.subslock:
+                try:
+                    expected = len([ i for i in self.knownSubscribers[target] if self.knownSubscribers[target][i]>240])
+                except:
+                    expected = 1
 
             e = threading.Event()
             w = common.ExpectedAckCounter(e,expected)
@@ -639,15 +666,44 @@ class _Client():
         else:
             return
 
-    def call(self,name,data, timeout=None):
-        "Call a function by it's register ID"
-        delay = self.fastestOverallCallResponse *1.3
+    def call(self,name,data, timeout=None, retry=None):
+        """Call a function by it's register ID. Retry is a hint for how fast to retry.
+           It will never use a value slower but may speed up if it detects that it should be optimized.
+
+           By default, it will 
+        """
+        retry = retry or 0.075
+        if name in self.averageResponseTimes:
+            #We can go to 8x faster than the specified retry time if the algorithm says to retry faster.
+            #The algorithm being to go 2.5 standard deviations above what we expect
+            #I believe that stil will result in approximately 
+            delay = min(retry,(self.averageResponseTimes[name]+ self.stdDevResponseTimes[name]*2))
         timeout = timeout or self.timeout
         start = time.time()
         callset = []
         while time.time()-start<timeout:
             try:
-                x= self._call(name,data,delay,callset)
+                x= self._call(name,data,retry,callset)
+                totaltime = time.time()-start
+
+                #Calculate approximate average and std deviation
+                if name in self.averageResponseTimes:
+                    #Assumptions: nothing is ever deleted from the dict, and 
+                    #we don't care if a sample gets ignored because of thread unsafeness
+                    avg =  self.averageResponseTimes[name]
+                    self.averageResponseTimes[name] = (avg*4+totaltime)/5
+                    deviation = abs(totaltime-avg)
+                    if name in self.stdDevResponseTimes:
+                        #Outlier resistance
+                        if deviation<(self.stdDevResponseTimes[name]*5):
+                            self.stdDevResponseTimes[name] = (self.stdDevResponseTimes[name]*4+deviation)/5
+                        else:
+                            self.stdDevResponseTimes[name] = (self.stdDevResponseTimes[name]*24+deviation)/25
+                    
+                    else:
+                        self.stdDevResponseTimes[name] = deviation
+                else:
+                    self.averageResponseTimes[name] =totaltime
                 self.fastestOverallCallResponse = min(self.fastestOverallCallResponse,time.time()-start)
                 #It creeps up if not smashed back down to account for changing delays
                 self.fastestOverallCallResponse += 0.0005
@@ -659,6 +715,7 @@ class _Client():
 
 
     def _call(self, name, data, timeout = None, idempotent=True, callset=None):
+        """Perform one attempt at a call, without a retry"""
         with self.lock:
             self.counter+=1
             counter = self.counter
@@ -722,7 +779,11 @@ class Client():
         self.clientID = clientID
         self.knownSubscribers = self.client.knownSubscribers
 
-      
+        def ex(f):
+            f()
+
+        self.execute = ex
+
     def messageTarget(self,target,callback):
         return self.client.messageTarget(target, callback)
     @property
@@ -744,10 +805,11 @@ class Client():
             self.client.close()
         except:
             pass
+
     def listDir(self, path, start=0):
         "List dir size on remote, starting at the nth file, because of limited message size."
         path = path.encode("utf8")
-        return(self.call(14, struct.pack("<H",start)+path))
+        return[i[1:] for i in (self.call(14, struct.pack("<H",start)+path)).split(b"\x00")]
 
 
 
@@ -811,6 +873,13 @@ class Client():
 
     def countBroadcastSubscribers(self,topic):
         return self.client.countBroadcastSubscribers(topic)
+
+    
+    def onServerConnect(self, addr, pubkey):
+        """
+            Meant for subclassing. Used to detect whenever a secure connection to a new server happens.
+            Note that this fires anytime a connection is re established. Pubkey is none if PSK
+        """
 
     def onNewSubscriber(self, target, addr):
         """
