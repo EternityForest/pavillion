@@ -1,4 +1,8 @@
 from pavillion import *
+import pavillion
+
+#Make it able to exit faster?
+pavillion.daemon = True
 
 import time
 import libnacl
@@ -353,6 +357,7 @@ if __name__ == '__main__':
                 #Servers identify clients by client id and key pairs.
                 s = Server(keys={cid1:psk},multicast=group)
                 s2 = Server(keys={cid1:psk},multicast=group)
+                time.sleep(0.3)
 
                 c = Client(psk=psk, clientID=cid1,address=(group,1783))
                 time.sleep(0.5)
@@ -430,6 +435,7 @@ if __name__ == '__main__':
                 #Servers identify clients by client id and key pairs.
                 s = Server(keys={cid1:psk},multicast=group)
                 s2 = Server(keys={cid1:psk},multicast=group)
+                time.sleep(0.1)
 
                 c = Client(psk=psk, clientID=cid1,address=(group,1783))
                 c2 = Client(psk=psk, clientID=cid1,address=(group,1783))
@@ -550,6 +556,7 @@ if __name__ == '__main__':
                 #interfering servers
                 s3 = Server(keys={cid1:psk2},multicast=group)
                 s4 = Server(keys={cid2:psk2},multicast=group)
+                time.sleep(0.1)
 
 
                 c = Client(psk=psk, clientID=cid1,address=(group,1783))

@@ -72,7 +72,8 @@ Data area format:
 <Newline terminated UTF8 target> <Newline terminated UTF8 name> <Binary payload>
 
 #### 2: Message Acknowledge
-Represents an acknowledgement of an `01 reliable message` packet. Data is the message counter for that packet.
+Represents an acknowledgement of an `01 reliable message` packet, or another message type that expects acknowledgement.
+Data is the message counter for that packet.
 
 
 #### 3: Unreliable Message
@@ -132,27 +133,39 @@ Data area format:
 This message may be sent by either party, and signals the end of a session. Another quit message may be sent in reply.
 The first 2 bytes should be 0 to indicate normal exiting.
 
+#### 13: Subscribe
+This message should contain a topic. It indicates that the sender of the message wishes to recieve messages on that topic.
+A sender may(and should) send low-volume messages anyway, regardless of subscription status. A separate API
+should be provided for "send always" and "send to subscribers". Should be acknowledged with message type 02.
+
+#### 14: Unsubscribe
+Same as above, but for unsubscribing.
+
+
+
+
 #### Opcode 15
 
 
 ### Reliable Messaging 
 
-Only a client can send and only a server can recieve reliable and unreliable messages.
+Reliable and unreliable messages can be sent by either the server or client, but work slightly differently 
+on the server vs the client.
 
-A reliable message is a single packet of data, sent to a "target" on a single server or a multicast group, having a utf8 name and a binary
-data field.
+A reliable message is a single packet of data, sent to a "target" on a single client, server, or multicast group, having a utf8 name and a binary data field. Messages sent by the server should be sent unicast directly to each client individually.
 
-A client wishing to send a multicast message must send an `01 reliable message` to the appropriate multicast group or unicast address. All servers recieving this message
-should reply with an `02 acknowledge` message sent via unicast to the client. clients recieving this message should add the server to the list of active subscribers
-for that target.
+A client wishing to send a multicast message must send an `01 reliable message` to the 
+appropriate multicast group or unicast address. All nodes recieving this message
+should reply with an `02 acknowledge` message sent via unicast to the sender.
 
-Clients should resend multicasts until all active subscribers have replied. Clients should send blank messages every minute as keepalives, and remove
-servers that have not replied in five minutes.
+Senders recieving this message should add the server to the list of active subscribers for that target.
+
+Senders should resend multicasts until all active subscribers have replied. Senders should send blank messages(empty
+data, name, and value) every minute as keepalives, and remove recievers that have not replied in five minutes.
 
 ### Unreliable Messaging
 
-Unreliable messaging works the same, except clients send `03 Unreliable message` instead and no acknowledge is sent. Messages should be passed to the application
-layer the same either way.
+Unreliable messaging works the same, except senders send `03 Unreliable message` instead and no acknowledge is sent. Messages should be passed to the application layer the same either way.
 
 
 ## State Machine Synchronization Protocol

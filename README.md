@@ -3,17 +3,19 @@
 
 ## Intro
 
-Pavillion is a UDP based protocol aiming to support most of the common messaging modes(Reliable and Unreliable pubsub, RPC, Read/Write/Unreliable write, discovery, etc). The protocol is conceptually connectionless and designed so that implementations can hide the existance of connections.
+Pavillion is a UDP based protocol aiming to support most of the common messaging modes(Reliable and Unreliable pubsub, RPC, Read/Write/Unreliable write, discovery, etc). The protocol is conceptually connectionless and designed so that implementations can hide the existance of connections. If either side of a connection reboots, it will automatically
+reconnect next time you try to send anything.
 
 This reference implementation is written in Python, but the protocol is designed to be light enough to work on servers.
 
-There is no requirement for message brokers, devices simply send directly to each other.
+There is no requirement for message brokers, devices simply send directly to each other, however it's possible to
+use a server as a message broker for many clients.
 
 In addition, Pavillion aims to integrate encryption at the application layer, using the usual libsodium. The protocol is designed to allow for future ciphers to be added
 
 *As I am not a cryptography expert, you have no reason to trust this, but it should deter casual snooping.*
 
-Not that it isn't *intended* to be fairly secure. It doesn't provide perfect forward secrecy or anything like that, but in theory nobody should be able to read your messages, make fake ones, or do replay attacks.They can easily do traffic analysis to learn your message lengths.
+Not that it isn't *intended* to be fairly secure. It doesn't provide perfect forward secrecy or do much to prevent traffic analysis, or anything like that, but in theory nobody should be able to read your messages, make fake ones, or do replay attacks. There's a challenge response authentication step that does not require a real time clock.
 
 Right now this doesn't even have a version number and everything is subject to change.
 

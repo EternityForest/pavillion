@@ -6,7 +6,7 @@ from typing import Sequence, Optional, Tuple
 
 from .common import nonce_from_number,pavillion_logger,DEFAULT_PORT,DEFAULT_MCAST_ADDR,ciphers,MAX_RETRIES,preprocessKey
 from . import common
-
+import pavillion
 
 class RemoteError(Exception):
     pass
@@ -252,8 +252,12 @@ class _RemoteServer():
             logging.warning("Bad header "+str(msg))
 
 class _Client():
-    def __init__(self, address:Tuple[str,int]=('255.255.255.255',DEFAULT_PORT),clientID=None,psk=None,cipher=1,server=None,keypair=None, serverkey=None, handle=None):
+    def __init__(self, address:Tuple[str,int]=('255.255.255.255',DEFAULT_PORT),clientID=None,psk=None,cipher=1,server=None,keypair=None, serverkey=None, handle=None,daemon=None):
         "Represents a Pavillion client that can both initiate and respond to requests"
+        
+        if daemon is None:
+            daemon=pavillion.daemon
+
         #The address of our associated server
         self.server_address = address
 
@@ -382,12 +386,13 @@ class _Client():
 
 
         t = threading.Thread(target=self.loop)
-        t.daemon = True
+        t.daemon = daemon
         t.name+=":PavillionClient"
 
         t.start()
 
-
+        #Attempt to connect. The protocol has reconnection built in,
+        #But this lets us connect in advance
         if self.psk and self.clientID:
             pass
             self.sendNonceRequest()
@@ -434,7 +439,7 @@ class _Client():
         #TODO: decide if this is actually a good idea, and for what opcodes. ATM it doesn't work.
         try:
             if addr==None and len(self.known_servers)==1:
-                if 0 and self.lastActualBroadcast> time.time()-3:
+                if self.lastActualBroadcast> time.time()-3:
                     for i in self.known_servers:
                         addr = i
                 else:
@@ -773,16 +778,15 @@ class _Client():
 
 
 class Client():
-    def __init__(self, address=('255.255.255.255',1783),clientID=None,psk=None,cipher=1,keypair=None, serverkey=None, server=None):
+    def __init__(self, address=('255.255.255.255',1783),clientID=None,psk=None,cipher=1,keypair=None, 
+    serverkey=None, server=None,execute=None,daemon=None):
         "Represents a public handle for  Pavillion client that can initiate requests"
-        self.client= _Client(address,clientID,psk,cipher=cipher, server=server,keypair=keypair,serverkey=serverkey,handle=self)
+        self.client= _Client(address,clientID,psk,cipher=cipher, server=server,keypair=keypair,serverkey=serverkey,handle=self,daemon=daemon)
         self.clientID = clientID
         self.knownSubscribers = self.client.knownSubscribers
+        self.execute = execute or pavillion.execute
 
-        def ex(f):
-            f()
 
-        self.execute = ex
 
     def messageTarget(self,target,callback):
         return self.client.messageTarget(target, callback)

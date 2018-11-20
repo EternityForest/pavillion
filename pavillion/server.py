@@ -18,6 +18,7 @@ import weakref, types, collections, struct, time, socket,threading,random,os,log
 from .common import ciphers,DEFAULT_MCAST_ADDR,DEFAULT_PORT,nonce_from_number,pavillion_logger,preprocessKey
 from . import common
 
+import pavillion
 
 SESSION_TIMEOUT = 300
 
@@ -65,6 +66,8 @@ class _ServerClient():
         #The last time we actually got a proper message from them
         self.lastSeen =0
 
+        #What topics has this client subscribed to.
+        self.subscriptions = {}
 
         #Sessions IDs are initialized to random values.
         #It's used so that servers can detect if they are still connected
@@ -256,10 +259,12 @@ class _ServerClient():
                     if self.guest_key:
                         self.clientID = common.libnacl.generic_hash(self.guest_key)
                     self.ignore = 0
+                    self.sendSetup(0, 7, self.sessionID)
                     logging.info("Setup connection with client via ECC")
 
 class _Server():
-    def __init__(self,port=DEFAULT_PORT,keys=None,pubkeys=None,address='',multicast=None, ecc_keypair=None, handle=None, allow_guest=False):
+    def __init__(self,port=DEFAULT_PORT,keys=None,pubkeys=None,address='',multicast=None, 
+    ecc_keypair=None, handle=None, allow_guest=False,daemon=False,execute=None):
         """The private server object that the user should not see except via the interface.
            This is because we don't want to
         
@@ -268,7 +273,11 @@ class _Server():
 
            multicast is a multicast IP address that the server will listen on if specified. Adress is the local IP to bind to.
 
-           ecc_keypair is a tuple of raw binary (public,private) keys. If not supplied, the server is symmetric-only. 
+           ecc_keypair is a tuple of raw binary (public,private) keys. If not supplied, the server is symmetric-only.
+
+           daemon specifies the daemon status of the server's listening thread. Defaults to false,
+           but you might want this to be True if you can accept the server not getting to finish executing a function,
+           or if the handle's execute function already takes care of that.
            
         """
 
@@ -341,11 +350,15 @@ class _Server():
                 raise RuntimeError("System shutting down")
             common.cleanup_refs.append(weakref.ref(self))
 
+        #Function used to execute RPC callbacks and handlers and such
+
+        self.execute = execute or pavillion.execute
 
         #Max number of clients we keep track of, including ignored ones
         self.maxclients = 512
         t = threading.Thread(target=self.loop)
         t.name+=":PavillionServer"
+        t.daemon = daemon
         t.start()
 
         
@@ -579,6 +592,12 @@ class _Server():
 
                     self.knownclients[addr] = _ServerClient(self, addr)
                 self.knownclients[addr].onRawMessage(addr,m)
+            except OSError:
+                #Ignore errors if it's just messages recieved while closing but before
+                #the thread stops
+                if self.running:
+                    pavillion_logger.exception("Exception in server loop")
+
             except:
                 pavillion_logger.exception("Exception in server loop")
 
@@ -592,12 +611,14 @@ class _Server():
 
 class Server():
     """The public interface object that a user might interact with for a Server object"""
-    def __init__(self,port=DEFAULT_PORT, keys=None,pubkeys=None, address='',multicast=None,ecc_keypair=None,allow_guest=False):
+    def __init__(self,port=DEFAULT_PORT, keys=None,pubkeys=None, address='',multicast=None,ecc_keypair=None,allow_guest=False,daemon=None,execute=None):
         keys = keys or {}
         #Yes, we want the objects to share the mutable dict, 
         self.keys = keys
         self.pubkeys = pubkeys
-        self.server = _Server(port=port,keys=keys,pubkeys=pubkeys,address=address,multicast=multicast,ecc_keypair=ecc_keypair,handle=self,allow_guest=allow_guest)
+        if daemon is None:
+            daemon = pavillion.daemon
+        self.server = _Server(port=port,keys=keys,pubkeys=pubkeys,address=address,multicast=multicast,ecc_keypair=ecc_keypair,handle=self,allow_guest=allow_guest,daemon=daemon,execute=execute)
         self.registers = self.server.registers
         self.ignore = self.server.ignore
 
