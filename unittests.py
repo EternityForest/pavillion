@@ -137,8 +137,8 @@ if __name__ == '__main__':
                 cid2 = b'cid2'*4
 
                 #Servers identify clients by client id and key pairs.
-                s = Server(pubkeys={cid2:c_pub}, ecc_keypair=(s_pub,s_pk))
-
+                s = Server(pubkeys={cid2:c_pub}, ecc_keypair=(s_pub,s_pk))                
+                time.sleep(0.5)
                 c = Client(keypair=(c_pub,c_pk), serverkey=s_pub, clientID=cid2,cipher=2)
 
                 time.sleep(0.5)

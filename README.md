@@ -85,6 +85,12 @@ Incomplete docs
 ### c.messageTarget(target, f)
 Returns a messageTarget obj you must keep a ref to, along with the function itself. As long as those exist, incoming messages will cause f(name, data, addr) to be called.
 
+## Server Objects
+
+### s.sendMessage("TestTarget","MessageName",b'data_pubkeyreversecoms')
+Sends a message to all clients. May be slow compared to client to server messages.
+
+
 ## Client-Server model
 
 Pavillion uses a traditional client-server model, except that clients and servers may share a port. With a few exceptions, only a client can initiate a request, and only a server may respond to or act on a request. This includes reliable and unreliable multicasting modes.

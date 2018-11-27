@@ -71,7 +71,15 @@ This will involve recording each the nonce or hash for each response and clearin
 Challenges should change at least once a minute.
 
 
-A server can use the sessionID to ignore messages if the client is already connected. When using PSK, the sessionID is the hash of the session key with the nonce as hash key. With ECC, the key is the hash of the session key with the server's nonce as key.
+A server can use the sessionID to ignore messages if the client is already connected. The session ID
+is the server to client session key, hashed with either the PSK or the client's public key, depending on
+what encryption the session uses.
+
+So long as the server is still accepting messages on that session key, the connection can be considered
+in some sense "open", because there's no reason a server should change it's server to client key
+while still using the old client to server key.
+
+If this is not set up, any manner of random garbage data may be used.
 
 It should be all zeros or random if there is no active session to check.
 
