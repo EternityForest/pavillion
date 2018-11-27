@@ -32,7 +32,7 @@ def dbg(*a):
 def is_multicast(addr):
     if not ":" in addr:
         a = addr.split(".")
-        if 224>= int(a[0]) >= 239:
+        if 224<= int(a[0]) <= 239:
             return True
         return False
     else:
@@ -139,7 +139,7 @@ class _RemoteServer():
                 #We don't know how to process this message. So we send
                 #a nonce request to the server
                 else:
-                    pavillion_logger.warning("Recieved packet from unknown server, attempting setup")
+                    pavillion_logger.debug("Recieved packet from unknown server, attempting setup")
                     self.sendNonceRequest()
 
             #Counter 0 indicates protocol setup messages
@@ -150,6 +150,11 @@ class _RemoteServer():
                 #Send a nonce request.
                 if opcode==4:
                     self.sendNonceRequest()
+                #Message 5 is a "New server join" message, which is sent by a server to the multicast
+                #Address when if first joins. It may also be unicast back to the last known addresses of clients,
+                #To provide for fast reconnection if the server is powered off. Don't wear out flash memory though.
+                if opcode==5:
+                    self.sendNonceRequest()                
                 
                 if opcode==7:
                     pass
@@ -184,20 +189,21 @@ class _RemoteServer():
                                     #is only usable once
                                     dbg("valid hash",addr)
                 
-                                    #send client info
+                                    #send client info. Maybe a race condition here with old messages. I doubt it matters.
                                     m = struct.pack("<B16s32s32sQ",clientobj.cipher.id,clientobj.clientID,clientobj.nonce,servernonce,clientobj.counter)
-                                    clientobj.counter +=3
+                                    clientobj.counter +=1
                                     v = clientobj.cipher.keyedhash(m,clientobj.psk) 
                                     #Send the message even with used nonces, but only change state for new ones.
                                     self.sendSetup(0, 3, m+v,addr=addr)
-                                    
-
+         
                                     if servernonce in clientobj.usedServerNonces:
                                         dbg("already used that nonce,bye")
                                         return
                                     
                                     clientobj.usedServerNonces[servernonce] = True
                                     self.skey = clientobj.cipher.keyedhash(clientobj.nonce+servernonce,clientobj.psk)
+                                    #Any message they send can't have been older than this handshake,
+                                    #So we accept all counter values.
                                     self.server_counter =0
                                     self.sessionID = clientobj.cipher.keyedhash(clientobj.key, servernonce)[:16]
 
@@ -357,7 +363,7 @@ class _Client():
             self.msock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  
             self.msock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1) 
             # Bind to the server address
-            self.msock.bind(self_address)
+            self.msock.bind((self_address[0],self.server_address[1]))
             self.msock.settimeout(1)
             group = socket.inet_aton(address[0])
             mreq = struct.pack('4sL', group, socket.INADDR_ANY)
@@ -436,17 +442,16 @@ class _Client():
         
         #Don't override the address setting though, if manually given
 
-        #TODO: decide if this is actually a good idea, and for what opcodes. ATM it doesn't work.
+        #TODO: decide if this is actually a good idea, and for what opcodes.
         try:
             if addr==None and len(self.known_servers)==1:
-                if self.lastActualBroadcast> time.time()-3:
+                if self.lastActualBroadcast> time.time()-0.1:
                     for i in self.known_servers:
                         addr = i
                 else:
                     self.lastActualBroadcast = time.time()
         except:
             pass
-
         if self.psk or self.keypair:
             self.sendSecure(counter,opcode,data,addr)
         else:
@@ -461,7 +466,7 @@ class _Client():
     def sendSetup(self, counter, opcode, data,addr=None):
         "Send an unsecured packet"
         m = struct.pack("<Q",counter)+struct.pack("<B",opcode)+data
-        self.sock.sendto(b"PavillionS0"+m,self.server_address)
+        self.sock.sendto(b"PavillionS0"+m,addr or self.server_address)
 
     def sendSecure(self, counter, opcode, data,addr=None):
         "Send a secured packet"

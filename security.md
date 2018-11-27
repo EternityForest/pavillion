@@ -141,7 +141,8 @@ A server sends this message with no payload after the opcode to indicate that th
 ### New Server Join (Opcode 5)
 This message is sent to a multicast address when a server starts listening to it. Clients should send a Nonce Request to the server if they want to send multicast.
 
-Multicast transmitters should listen to their multicast group, but ignore any messages there except New Server Join.
+Multicast transmitters should listen to their multicast group, ignoring their own messages, but otherwise processing
+New Server Join or Unrecognized Client messages.
 
 
 ### Invalid Client ID(opcode 6)

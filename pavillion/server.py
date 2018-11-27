@@ -48,6 +48,9 @@ class _ServerClient():
         self.skey = None
         self.server = server
         self.client_counter =0
+        #Used to keep track of an unused number we can still accept even
+        #If it's lower than the expected counter value
+        self.unusedOutOfOrderCounterValue =None
         self.clientID = None
         self.guest_key = None
         #ServerChallenge in the docs
@@ -98,7 +101,6 @@ class _ServerClient():
         "Handle a raw UDP packet from the client"
         s = b"PavillionS0"
         unsecure = b"Pavillion0"
-
         #Header checks
         if not msg.startswith(s):
             #A regular message. Check if we're accepting unsecured messages, and if so pass it to
@@ -130,13 +132,31 @@ class _ServerClient():
                     plaintext = self.decrypt(ciphertext,  self.ckey, nonce_from_number(counter))
                 except:
                     self.sendSetup(0, 4, b'')
-                    self.ignore = time.time()+5
+                    #If we have recieved a valid message recently,
+                    #don't ignore just because there's random line garbage,
+                    if self.lastSeen<(time.time()-100):
+                        self.ignore = time.time()+5
                     return
                 
                 self.lastSeen = time.time()
-                #Duplicate protection
+                #Duplicate protection, make sure the counter increments.
+                #Do some minor out-of-order counter value handling.
+                #If we detect that the counter has incremented by more than exactly 1,
+                #The unused value may be accepted.
+                
+                #TODO: Support keeping track of multiple unused values. One
+                #should be much better than none for now.
                 if self.client_counter>=counter:
-                    return
+                    with self.server.lock:
+                        if counter == self.unusedOutOfOrderCounterValue:
+                            self.unusedOutOfOrderCounterValue = None
+                        else:
+                            return
+                
+                if counter > self.client_counter+1:
+                    with self.server.lock:
+                        self.unusedOutOfOrderCounterValue = self.client_counter+1
+                    
                 self.client_counter = counter
                 self.server.onMessage(addr,counter,plaintext[0],plaintext[1:],self.clientID)
 
@@ -318,6 +338,7 @@ class _Server():
         self.sock.settimeout(1)
 
         self.sendsock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sendsock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1) 
         self.sendsock.bind((self.address[0],0))
         self.sendsock.settimeout(1)
 
@@ -448,7 +469,6 @@ class _Server():
                     time.sleep(x)
                     if e.wait(x):
                         return
-                    print("jiwiav", counter)
                     self.broadcast(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data,filt)
             if reliable:
                 #Return how many subscribers definitely recieved the message.
@@ -563,7 +583,6 @@ class _Server():
 
         while(self.running):
             try:
-            #TODO: We need to poll the sendsock here
                 r,w,x= select.select([self.sock,self.sendsock],[],[],5)
             except:
                 continue
@@ -577,29 +596,29 @@ class _Server():
                 if addr in self.ignore:
                     continue
 
-            #There's a possibility of dropped packets in a race condition between getting rid of
-            #and remaking a server. It doesn't matter, UDP is unreliable anyway
-            try:
-                if addr==self.address:
-                    continue
-                if not addr in self.knownclients:
-                    #If we're out of space for new clients, go through and find one we haven't seen in a while.
-                    if len(self.knownclients)>self.maxclients:
-                        with self.lock:
-                            self._cleanupSessions()
-                    if len(self.knownclients)>self.maxclients:
+                #There's a possibility of dropped packets in a race condition between getting rid of
+                #and remaking a server. It doesn't matter, UDP is unreliable anyway
+                try:
+                    if addr==self.address:
                         continue
+                    if not addr in self.knownclients:
+                        #If we're out of space for new clients, go through and find one we haven't seen in a while.
+                        if len(self.knownclients)>self.maxclients:
+                            with self.lock:
+                                self._cleanupSessions()
+                        if len(self.knownclients)>self.maxclients:
+                            continue
 
-                    self.knownclients[addr] = _ServerClient(self, addr)
-                self.knownclients[addr].onRawMessage(addr,m)
-            except OSError:
-                #Ignore errors if it's just messages recieved while closing but before
-                #the thread stops
-                if self.running:
+                        self.knownclients[addr] = _ServerClient(self, addr)
+                    self.knownclients[addr].onRawMessage(addr,m)
+                except OSError:
+                    #Ignore errors if it's just messages recieved while closing but before
+                    #the thread stops
+                    if self.running:
+                        pavillion_logger.exception("Exception in server loop")
+
+                except:
                     pavillion_logger.exception("Exception in server loop")
-
-            except:
-                pavillion_logger.exception("Exception in server loop")
 
         #Close sock at end
         self.sock.close()

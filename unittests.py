@@ -353,14 +353,16 @@ if __name__ == '__main__':
                 cid1 = b'cid1'*4
 
                 group = "224.1.0.39"
+                
+                c = Client(psk=psk, clientID=cid1,address=(group,1783))
+                time.sleep(0.5)
 
                 #Servers identify clients by client id and key pairs.
                 s = Server(keys={cid1:psk},multicast=group)
                 s2 = Server(keys={cid1:psk},multicast=group)
                 time.sleep(0.3)
 
-                c = Client(psk=psk, clientID=cid1,address=(group,1783))
-                time.sleep(0.5)
+
 
                 incoming = []
                 incoming2 = []
