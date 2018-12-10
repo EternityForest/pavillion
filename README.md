@@ -85,9 +85,15 @@ Incomplete docs
 ### c.messageTarget(target, f)
 Returns a messageTarget obj you must keep a ref to, along with the function itself. As long as those exist, incoming messages will cause f(name, data, addr) to be called.
 
+### x = c.call(number, arguments)
+Calls RPC function number N with the given binary arg string. Normally returns the return data
+As arg string, but may raise pavillion.Client.RemoteError or others if the server sends back an error code.
+
+
+
 ## Server Objects
 
-### s.sendMessage("TestTarget","MessageName",b'data_pubkeyreversecoms')
+### s.sendMessage(target, name, data)
 Sends a message to all clients. May be slow compared to client to server messages.
 
 
@@ -112,7 +118,8 @@ General multicast application traffic uses port 1783 on multicast group 239.255.
 
 ## What's working so far
 
-At the moment, we have secure reliable multicasting and unicasting with both ECC and preshared keys. Servers can accept "Guest" connections when using
-ECC, RPC calls are working.
+At the moment, we have secure reliable multicasting and unicasting with both ECC and preshared keys. Servers can accept "Guest" connections when using ECC, RPC calls are working.
+
+ESP32 and ESP8266 support is working, although the ESP8266 cannot currently send reliable messages(And will probably crash if you try). Unreliable messages and recieving messages are fine.
 
 Check out the unit tests for examples.

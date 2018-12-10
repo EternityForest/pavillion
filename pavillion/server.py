@@ -74,7 +74,6 @@ class _ServerClient():
         self.secureLastSeen =0
         self.lastSeen =0
 
-
         #What topics has this client subscribed to.
         self.subscriptions = {}
 
@@ -140,7 +139,14 @@ class _ServerClient():
                 try:
                     plaintext = self.decrypt(ciphertext,  self.ckey, nonce_from_number(counter))
                 except:
-                    self.sendSetup(0, 4, b'')
+
+                    #If we recieved a valid message from them within 1s, then
+                    #this message is likely just random crap, and we can ignore it.
+                    #This prevents a whole bunch of reconnect attemps when we get older
+                    #messages that used a different key.
+                    if self.secureLastSeen<(time.time()-1):
+                        self.sendSetup(0, 4, b'')
+
                     #If we have recieved a valid message recently,
                     #don't ignore just because there's random line garbage,
                     if self.secureLastSeen<(time.time()-100):

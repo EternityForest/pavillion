@@ -23,66 +23,69 @@ SOFTWARE.
 
 #include "pavillion.h"
 
-
-int rpcpinmode(void * data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int * rlen)
+int rpcpinmode(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
 {
-  if (((uint8_t* )data)[1] == 0)
+  if (((uint8_t *)data)[1] == 0)
   {
-    pinMode(((uint8_t* )data)[0], INPUT);
+    pinMode(((uint8_t *)data)[0], INPUT);
   }
-  else if (((uint8_t* )data)[1] == 3)
+  else if (((uint8_t *)data)[1] == 3)
   {
-    pinMode(((uint8_t* )data)[0], INPUT_PULLUP);
+    pinMode(((uint8_t *)data)[0], INPUT_PULLUP);
   }
-  else if (((uint8_t* )data)[1] == 139)
+  else if (((uint8_t *)data)[1] == 139)
   {
-    pinMode(((uint8_t* )data)[0], OUTPUT);
+    pinMode(((uint8_t *)data)[0], OUTPUT);
   }
   else
   {
     RPC_ERR(2, "Supported pinModes: 0, 3, 139");
-
   }
 
   *rlen = 0;
   return 0;
 }
 
-int rpcanalogread(void * data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int * rlen)
+int rpcanalogread(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
 {
   *rlen = 4;
-  dbg(((uint8_t* )data)[0]);
-  dbg(analogRead(((uint8_t* )data)[0]));
-
-  ((int32_t *)rbuffer)[0] = analogRead(((uint8_t* )data)[0]);
-  return 0;
+  writeUnsignedNumber(rbuffer, 4, analogRead(((uint8_t *)data)[0]));
+   return 0;
 }
 
-
-
-int rpcdigitalread(void * data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int * rlen)
+int rpcdigitalread(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
 {
   *rlen = 1;
-  ((uint8_t *)rbuffer)[0] = digitalRead(((uint8_t* )data)[0]);
+  ((uint8_t *)rbuffer)[0] = digitalRead(((uint8_t *)data)[0]);
   return 0;
 }
 
-
 #include "FS.h"
+#ifdef ESP32
 #include "SPIFFS.h"
-
+#endif
 
 //rpc call that takes a 4 byte pointer and 2 byte len and reads up to that many bytes from a file
-int rpcfsread(void * data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int * rlen)
+int rpcfsread(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
 {
   rlen[0] = 0;
-  unsigned int pos = ((uint32_t *)data)[0];
-  unsigned int m = ((uint16_t *)(data + 4))[0];
+  unsigned int pos = readUnsignedNumber(data, 4);
+  unsigned int m = readUnsignedNumber(data + 4, 2);
 
-  File file = SPIFFS.open((char*)data + 6);
-  if (!file || file.isDirectory()) {
-    return 1;
+  File file = SPIFFS.open((char *)data + 6, "r");
+  if (!file)
+  {
+    file.close();
+    RPC_ERR(1, "Selected path is a directory or could not be opened");
   }
+
+#ifdef ESP32
+  if (!file || file.isDirectory())
+  {
+    file.close();
+    RPC_ERR(1, "Selected path is a directory");
+  }
+#endif
   int x = 0;
 
   file.seek(pos);
@@ -91,71 +94,57 @@ int rpcfsread(void * data, unsigned int datalen, KnownClient *client, void *rbuf
     m = 1400;
   }
 
-
-
-  *rlen = file.readBytes((char*)rbuffer, m);
+  *rlen = file.readBytes((char *)rbuffer, m);
   file.close();
   return 0;
 }
 
 //rpc call that takes a 4 byte pointer and 2 byte len and a block of data then an fn, and writes that to a file at that pos
-int rpcfswrite(void * data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int * rlen)
+int rpcfswrite(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
 {
   *rlen = 0;
-  unsigned int pos = ((uint32_t *)data)[0];
-  unsigned int m = ((uint16_t *)(data + 4))[0];
+  unsigned int pos = readUnsignedNumber(data, 4);
+  unsigned int m = readUnsignedNumber(data + 4, 2);
 
-  dbg((char *)data + 6 + m);
-  dbg(pos);
-  dbg(m);
   File file;
 
-  file = SPIFFS.open((char*)data + 6 + m, "w");
+  file = SPIFFS.open((char *)data + 6 + m, "w");
 
-
-  if (!file) {
+  if (!file)
+  {
     file.close();
-    RPC_ERR(3, (char*)data + 6 + m);
+    RPC_ERR(3, (char *)data + 6 + m);
   }
 
-
-  
-  if (file.isDirectory()) {
+#ifdef ESP32
+  if (file.isDirectory())
+  {
     file.close();
     RPC_ERR(1, "Selected file is a directory");
   }
+#endif
   int x = 0;
 
-  file.write((uint8_t*)data + 6, m);
+  file.write((uint8_t *)data + 6, m);
   file.close();
   return 0;
-
 }
 
-
-
 // rpc call that takes a 4 byte pointer and 2 byte len and a block of data then an fn, and writes that to a file at that pos
-int rpcfswriteinto(void * data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int * rlen)
+int rpcfswriteinto(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
 {
   *rlen = 0;
-  unsigned int pos = ((uint32_t *)data)[0];
-  unsigned int m = ((uint16_t *)(data + 4))[0];
-
-  dbg((char *)data + 6 + m);
-  dbg(pos);
-  dbg(m);
+  unsigned int pos = readUnsignedNumber(data, 4);
+  unsigned int m = readUnsignedNumber(data + 4, 2);
 
   File file;
-  if (SPIFFS.exists((char*)data + 6 + m))
+  if (SPIFFS.exists((char *)data + 6 + m))
   {
-
-    dbg("writeto existing");
-    file = SPIFFS.open((char*)data + 6 + m, "r+");
+    file = SPIFFS.open((char *)data + 6 + m, "r+");
     if (file.size() <= pos)
     {
-      dbg("Going to append");
       file.close();
-      file = SPIFFS.open((char*)data + 6 + m, "a");
+      file = SPIFFS.open((char *)data + 6 + m, "a");
     }
     else
     {
@@ -164,63 +153,83 @@ int rpcfswriteinto(void * data, unsigned int datalen, KnownClient *client, void 
   }
   else
   {
-    file = SPIFFS.open((char*)data + 6 + m, "w+");
+    file = SPIFFS.open((char *)data + 6 + m, "w+");
   }
-  if (!file || file.isDirectory()) {
+
+  if (!file)
+  {
+    file.close();
+    RPC_ERR(1, "Selected path is a directory or could not be opened");
+  }
+
+#ifdef ESP32
+  if (!file || file.isDirectory())
+  {
     file.close();
     RPC_ERR(1, "Selected path is a directory");
   }
+#endif
+
   int x = 0;
 
-  file.write((uint8_t*)data + 6, m);
+  file.write((uint8_t *)data + 6, m);
   file.close();
   return 0;
-
 }
-
 
 //rpc call that takes a 4 byte pointer and 2 byte len and a block of data then an fn, and writes that to a file at that pos
-int rpcfsdelete(void * data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int * rlen)
+int rpcfsdelete(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
 {
   *rlen = 0;
-  SPIFFS.remove((char *) data);
+  SPIFFS.remove((char *)data);
   return 0;
-
 }
 
-
-int rpcfslist(void * data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int * rlen)
+int rpcfslist(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
 {
   *rlen = 0;
 
   //Min entry index to start listing at
-  unsigned int m = ((uint16_t *)(data ))[0];
+  unsigned int m = readUnsignedNumber(data, 2);
 
   int count = -1;
+#ifdef ESP32
+  File d = SPIFFS.open((char *)data + 2);
+#else
+  if (SPIFFS.exists((char *)data + 2) == false)
+  {
+    RPC_ERR(3, "Selected dir does not exist");
+  }
+  Dir d = SPIFFS.openDir((char *)data + 2);
+#endif
 
-  File d = SPIFFS.open((char *) data + 2);
-
-  int dirnamelen=strlen((char *)data+2);
+  int dirnamelen = strlen((char *)data + 2);
 
   //Get rid of the trailing slash that seems to mess things up
-  if((((char *)data+1+dirnamelen)[0])== '/')
+  if ((((char *)data + 1 + dirnamelen)[0]) == '/')
   {
-    ((char *)data+1+dirnamelen)[0]= 0;
+    ((char *)data + 1 + dirnamelen)[0] = 0;
   }
-  dbg(d.name());
+
+#ifdef ESP32
   if (!d)
   {
     RPC_ERR(3, "Selected dir does not exist");
-
   }
-  if (!d.isDirectory()) {
+
+  if (!d.isDirectory())
+  {
     RPC_ERR(1, "Selected obj is not a directory");
   }
+
   File f = d.openNextFile();
+#else
+  d.next();
+  File f = d.openFile("r");
+#endif
 
   while (f && (rlen[0] < 1024))
   {
-    dbg(f.name());
     count += 1;
 
     if (count < m)
@@ -229,30 +238,35 @@ int rpcfslist(void * data, unsigned int datalen, KnownClient *client, void *rbuf
     }
 
     //Get rid of the prefix part
-    strcpy((char*)rbuffer + 1, f.name()+dirnamelen+1);
+    strcpy((char *)rbuffer + 1, f.name() + dirnamelen + 1);
+
+//I don't think ESP8266 SPIFFS has true directories
+#ifdef ESP32
     if (f.isDirectory())
+#else
+    if (0)
+#endif
     {
-      *(char*) rbuffer = 2;
+      *(char *)rbuffer = 2;
     }
     else
     {
-      *(char*) rbuffer = 1;
+      *(char *)rbuffer = 1;
     }
 
-    //Plus 1 for typecode, plus 1 for null
-    rlen[0] += strlen(f.name()-(dirnamelen+1)) + 2;
-    rbuffer += strlen(f.name()-(dirnamelen+1)) + 2;
+    //Plus 1 for typecode, plus 1 for null, plus 3 for reasons I don't understand
+    rlen[0] += strlen(f.name() - (dirnamelen + 1)) + 6;
+    rbuffer += strlen(f.name() - (dirnamelen + 1)) + 6;
+#ifdef ESP32
     f = d.openNextFile();
-
+#else
+    d.next();
+    f = d.openFile("r");
+#endif
   }
 
-
-
-
   return 0;
-
 }
-
 
 /*Enable "full access" to the ESP32*/
 
@@ -267,100 +281,86 @@ void PavillionServer::enableRemoteAccess()
   addRPC(20, "pinMode", rpcpinmode);
   addRPC(23, "analogRead", rpcanalogread);
   addRPC(21, "digitalRead", rpcdigitalread);
-
-
 }
-
 
 /*
    Given a function index, a name, and a function, add a new RPC function to the server.
    Servers can't be cleaned up, and functions can't be deleted.
 
 */
-void PavillionServer::addRPC(uint16_t number, char *fname, int(*function)(void * data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int * rlen))
+void PavillionServer::addRPC(uint16_t number, char *fname, int (*function)(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen))
 {
-  struct RpcFunction * n = new struct RpcFunction;
+  struct RpcFunction *n = new struct RpcFunction;
   n->function = function;
   n->index = number;
   n->fname = fname;
   n->next = 0;
 
-  struct RpcFunction * s = &fzero;
+  struct RpcFunction *s = &fzero;
 
   while (s->next)
   {
     s = s->next;
   }
 
-  s -> next = n;
+  s->next = n;
 }
 
-
-void PavillionServer::doRPC(uint16_t number, KnownClient *client, void * data, uint16_t datalen, uint64_t callid)
+void PavillionServer::doRPC(uint16_t number, KnownClient *client, void *data, uint16_t datalen, uint64_t callid)
 {
 
-
   //For convenience of accepting strings, the byte after the last char is a null.
-  ((uint8_t*)data)[datalen] = 0;
-
+  ((uint8_t *)data)[datalen] = 0;
+  unsigned int rlen = 0;
+  char rbuffer[1501];
 
   //Builtin test mode returns exactly the data you send it.
   if (number == 0)
   {
-    uint8_t rbuffer[1501];
-    unsigned int rlen;
-    *((uint16_t *)(rbuffer + 8)) = 0;
-    *(uint64_t *)rbuffer = callid;
-    client->sendRawEncrypted(5, (uint8_t*)rbuffer, datalen + 10);
+    writeUnsignedNumber(rbuffer + 8, 2, 0);
+    writeUnsignedNumber(rbuffer, 8, callid);
+
+    client->sendRawEncrypted(5, (uint8_t *)rbuffer, datalen + 10);
     return;
   }
 
   if (number == 1)
   {
-    struct RpcFunction * s = &fzero;
-    unsigned int rlen = 0;
-    char rbuffer[256];
+    struct RpcFunction *s = &fzero;
     while (s->next)
     {
       s = s->next;
-      if (s->index == interpret(data, uint8_t))
+      if (s->index == readUnsignedNumber(data,2))
       {
-        char rbuffer[1501];
-        unsigned int rlen;
-        *((uint16_t *)(rbuffer + 8)) = s->function(data, datalen, client, rbuffer + 10, &rlen);
-        *(uint64_t *)rbuffer = callid;
+        rlen = strlen(s->fname);
+        strcpy(rbuffer + 10, s->fname);
+
+        writeUnsignedNumber(rbuffer + 8, 2, 0);
+        writeUnsignedNumber(rbuffer, 8, callid);
+        client->sendRawEncrypted(5, (uint8_t *)rbuffer, rlen + 10);
+        return;
       }
     }
-
-    rlen = strlen(s->fname);
-    strcpy(rbuffer + 10, s->fname);
-
-    *(uint64_t *)rbuffer = callid;
-    *((uint16_t *)(rbuffer + 8))  = 0;
-    client->sendRawEncrypted(5, (uint8_t*)rbuffer, rlen + 10);
-
   }
 
-  struct RpcFunction * s = &fzero;
-
+  struct RpcFunction *s = &fzero;
+  dbg("doing rpc");
+  dbg(number);
   while (s->next)
-  { ;
+  {
     s = s->next;
     if (s->index == number)
     {
-      char rbuffer[1501];
-      unsigned int rlen;
-      *((uint16_t *)(rbuffer + 8)) = s->function(data, datalen, client, rbuffer + 10, &rlen);
-      *(uint64_t *)rbuffer = callid;
-      client->sendRawEncrypted(5, (uint8_t*)rbuffer, rlen + 10);
+      writeUnsignedNumber(rbuffer + 8, 2, s->function(data, datalen, client, rbuffer + 10, &rlen));
+      writeUnsignedNumber(rbuffer, 8, callid);
+      client->sendRawEncrypted(5, (uint8_t *)rbuffer, rlen + 10);
       return;
     }
   }
-
- char rbuffer[30]= "0000000000NonexistentFunction";
-  unsigned int rlen=19;
-  *((uint16_t *)(rbuffer + 8)) = 2;
-  *(uint64_t *)rbuffer = callid;
-  client->sendRawEncrypted(5, (uint8_t*)rbuffer, rlen + 10);
+  char *rbuffer2 = (char *)malloc(32);
+  memcpy(rbuffer2,"0000000000NonexistentFunction",29);
+  rlen = 19;
+  *((uint16_t *)(rbuffer2 + 8)) = 2;
+  *(uint64_t *)rbuffer2 = callid;
+  client->sendRawEncrypted(5, (uint8_t *)rbuffer2, rlen + 10);
 }
-

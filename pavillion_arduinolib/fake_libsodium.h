@@ -51,7 +51,11 @@ void randombytes_buf(void * const buf, const size_t size)
 
   for(uint32_t i = 0;i<size;i++)
   {
+    #ifdef ESP32
     ((uint8_t*)buf)[i]=esp_random();
+    #else
+    ((uint8_t*)buf)[i] = secureRandom(256);
+    #endif
   }
 }
 void crypto_secretbox_easy(unsigned char *c, const unsigned char *m,
@@ -79,8 +83,6 @@ int crypto_secretbox_open_easy(unsigned char *c, const unsigned char *m,
                           unsigned long long mlen, const unsigned char *n,
                           const unsigned char *k)
                           {
-                            Serial.println((float)mlen);
-                            Serial.println("~~");
                             uint8_t * temp =  (uint8_t *)malloc(mlen+35);
                             for (uint8_t i=0;i<17;i++)
                             {

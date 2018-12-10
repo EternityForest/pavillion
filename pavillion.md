@@ -146,6 +146,9 @@ Same as above, but for unsubscribing.
 
 #### Opcode 15
 
+#### Opcode 16(Client Accept)
+The actual message content is reserved. This message indicates to the client that the secure connection
+was correctly established and may provide more info in the future.
 
 ### Reliable Messaging 
 

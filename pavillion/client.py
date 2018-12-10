@@ -24,7 +24,7 @@ rerrs = {
     3: BadInput,
     4: NonexistentFile
 }
-debug_mode = False
+debug_mode = 0
 def dbg(*a):
     if debug_mode:
         print (a)
@@ -83,12 +83,31 @@ class _RemoteServer():
         #Or activity from the server that is encrypted.
         self.secure_lastused = time.time()
 
+        self.lastNonceRequestRateLimitTimestamp=0
+        self.nonceRequestCounter = 0
+
+        #Last time we were known to be connected
+        self.connectedAt =0
+
     def sendSetup(self, counter: int, opcode: int, data: bytes ,addr=None):
         "Send an unsecured packet"
         m = struct.pack("<Q",counter)+struct.pack("<B",opcode)+data
         self.clientObject.sock.sendto(b"PavillionS0"+m, addr or self.clientObject.server_address)
 
     def sendNonceRequest(self,addr):
+        if time.time()-self.lastNonceRequestRateLimitTimestamp >10:
+            self.lastNonceRequestRateLimitTimestamp = time.time()
+            self.nonceRequestCounter = 0
+
+        #Don't send more than 8 in ten seconds
+        if self.nonceRequestCounter> 8:
+            return
+        #Lower limit if we already connected at some point
+        if self.skey and self.nonceRequestCounter > 5:
+            return
+
+        self.nonceRequestCounter +=1
+
         if self.clientObject.keypair:
             self.sendSetup(0, 1, struct.pack("<B",self.clientObject.cipher.id)+self.clientObject.clientID+self.clientObject.challenge+self.clientObject.sessionID+self.clientObject.keypair[1],addr=addr)
         else:
@@ -150,14 +169,17 @@ class _RemoteServer():
 
                     self.server_counter = counter
 
- 
+                    #Any message at all that we can decrypt indicates a valid connection
+                    self.connectedAt =time.time()
                     self.secure_lastused = time.time()
+
                     clientobj.onMessage(addr,counter,opcode,data)
 
                 #We don't know how to process this message. So we send
                 #a nonce request to the server
                 else:
                     pavillion_logger.debug("Recieved packet from unknown server, attempting setup")
+                    dbg("Unknown server sent packet", addr)
                     self.sendNonceRequest(addr)
 
             #Counter 0 indicates protocol setup messages
@@ -167,11 +189,13 @@ class _RemoteServer():
                 #Message 4 is an "Unrecognized Client" message telling us to redo the whole auth process.
                 #Send a nonce request.
                 if opcode==4:
+                    dbg("Unrecognized client message from", addr)
                     self.sendNonceRequest(addr)
                 #Message 5 is a "New server join" message, which is sent by a server to the multicast
                 #Address when if first joins. It may also be unicast back to the last known addresses of clients,
                 #To provide for fast reconnection if the server is powered off. Don't wear out flash memory though.
                 if opcode==5:
+                    dbg("New server join from", addr)
                     self.sendNonceRequest(addr)                
                 
                 if opcode==7:
@@ -493,6 +517,8 @@ class _Client():
 
     def sendSecure(self, counter, opcode, data,addr=None):
         "Send a secured packet"
+        dbg(counter)
+        dbg(self.key[0])
         self.lastSent = time
         q = struct.pack("<Q",counter)
         n = b'\x00'*(24-8)+struct.pack("<Q",counter)
@@ -617,6 +643,8 @@ class _Client():
                 try:
                     #Decrement the counter that started at 0
                     self.waitingForAck[d].onResponse(data[8:])
+                except KeyError:
+                    pass
                 except Exception:
                     print(traceback.format_exc(6))
                     pass
@@ -747,6 +775,8 @@ class _Client():
             #The algorithm being to go 2.5 standard deviations above what we expect
             #I believe that stil will result in approximately 
             delay = min(retry,(self.averageResponseTimes[name]+ self.stdDevResponseTimes[name]*2))
+        else:
+            delay = retry
         timeout = timeout or self.timeout
         start = time.time()
         callset = []
@@ -792,7 +822,7 @@ class _Client():
 
         w = common.ReturnChannel()
         if callset:
-            callset.append(w.queue)
+            callset.append(w)
         self.waitingForAck[counter] =w
         self.send(counter, 4, struct.pack("<H",name)+data)
 
@@ -806,6 +836,7 @@ class _Client():
         except:
             if callset:
                 for i in reversed(callset):
+                    i= i.queue
                     if not i.empty():
                         d = i.get(False)
                         break
@@ -816,7 +847,7 @@ class _Client():
         del self.waitingForAck[counter]
         returncode = struct.unpack("<H",d[:2])[0]
         if  returncode >0:
-            raise rerrs.get(returncode,RemoteError)("Error code "+str(returncode)+d[2:].decode("utf-8","backslashreplace"))
+            raise rerrs.get(returncode,RemoteError)("Error code "+str(returncode)+" "+d[2:].decode("utf-8","backslashreplace"))
         return d[2:]
 
 
@@ -923,7 +954,7 @@ class Client():
             if not d:
                 return(r)    
     def getFunctionName(self,idx):
-        return self.call(1,struct.pack("<B",idx)).decode('utf8', errors='ignore')
+        return self.call(1,struct.pack("<H",idx)).decode('utf8', errors='ignore')
 
 
     def analogRead(self,pin):

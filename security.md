@@ -132,6 +132,8 @@ as it is now impossible to replay old messages now that keys have been changed.
 The hashing method shall be defined on a per-cipher suite basis. As challenge-response is a fairly basic and common primative, future ciphers will
 probably use the same packet structure.
 
+Upon recieving this message, the server should send some kind of encrypted application-layer message, so the client
+knows the connection is good.
 
 
 #### Server's counter
@@ -162,8 +164,6 @@ for PSK Nonce messages, in case the Invalid Client ID message was faked.
 The client's challenge must be included to prevent DoS attacks. Sending this message requires being able to recieve at the server's address
 and not just the ability to spoof it.
 
-### Client Accept(S>C, opcode 7)
-This message must contain the current session ID, and informs the client that setup is complete.
 
 ### Handling Errors
 Upon recieving a message from an unfamiliar sender, a server should send a Unrecognized Peer message, which has a counter of 0, an opcode of 5,
