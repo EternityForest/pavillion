@@ -22,6 +22,30 @@ SOFTWARE.
 */
 
 #include "pavillion.h"
+#include <FS.h>
+#include <SD.h>
+
+#ifdef ESP32
+#include <SPIFFS.h>
+#endif
+
+//Arduino doesn't give us a way to access the root dir, without
+//Using esp32 posix only stuff. So we just select a mounted dir based on hardcoded names
+fs::FS *getFS(String fn)
+{
+  if (fn.startsWith("/spiffs"))
+  {
+    return &SPIFFS;
+  }
+#ifdef ESP32
+  if (fn.startsWith("/sd"))
+  {
+    return &SD;
+  }
+#endif
+
+  return 0;
+}
 
 int rpcpinmode(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
 {
@@ -50,7 +74,7 @@ int rpcanalogread(void *data, unsigned int datalen, KnownClient *client, void *r
 {
   *rlen = 4;
   writeUnsignedNumber(rbuffer, 4, analogRead(((uint8_t *)data)[0]));
-   return 0;
+  return 0;
 }
 
 int rpcdigitalread(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
@@ -72,7 +96,18 @@ int rpcfsread(void *data, unsigned int datalen, KnownClient *client, void *rbuff
   unsigned int pos = readUnsignedNumber(data, 4);
   unsigned int m = readUnsignedNumber(data + 4, 2);
 
-  File file = SPIFFS.open((char *)data + 6, "r");
+  fs::FS *mountpoint = getFS((char *)data + 6);
+  //Skip the first slash if any(Assume mountpoint name is at least 2 chars)
+  //Then get the slash after that.
+  char *fn = strchr((char *)data + 7, '/');
+
+  if (mountpoint == 0)
+  {
+    RPC_ERR(3, "That device does not exist or is disconnected.");
+  }
+  data += 6;
+
+  File file = mountpoint->open(fn, "r");
   if (!file)
   {
     file.close();
@@ -82,19 +117,50 @@ int rpcfsread(void *data, unsigned int datalen, KnownClient *client, void *rbuff
 #ifdef ESP32
   if (!file || file.isDirectory())
   {
-    file.close();
-    RPC_ERR(1, "Selected path is a directory");
+  // if (mountpoint != &SPIFFS)
+    {
+      file.close();
+      RPC_ERR(1, (String("Selected object ") + String(fn+1) + String(" is a directory")).c_str());
+    }
   }
 #endif
   int x = 0;
 
-  file.seek(pos);
-  if (m > 1400)
+  //You're exactly at the end of the file. Return 0 bytes.
+  if(pos == file.size())
   {
-    m = 1400;
+    *rlen = 0;
+    return 0;
   }
 
-  *rlen = file.readBytes((char *)rbuffer, m);
+  //Seek to 0 doesn't work?
+  if (pos){
+    //You tried to read past the end of the file
+    if (file.seek(pos) == false)
+    {
+      file.close();
+      RPC_ERR(1, (String("Failed to seek to position ") + String(pos)).c_str());
+    }
+  }
+
+  if (m > 1024)
+  {
+    m = 1024;
+  }
+
+  x = file.readBytes((char *)rbuffer, m);
+  if (x < 0)
+  {
+    file.close();
+    RPC_ERR(1, "Error reading file, return value below zero.");
+  }
+
+  if (x > 1200)
+  {
+    file.close();
+    RPC_ERR(1, "Error reading file");
+  }
+  rlen[0] = x;
   file.close();
   return 0;
 }
@@ -105,27 +171,42 @@ int rpcfswrite(void *data, unsigned int datalen, KnownClient *client, void *rbuf
   *rlen = 0;
   unsigned int pos = readUnsignedNumber(data, 4);
   unsigned int m = readUnsignedNumber(data + 4, 2);
+  data += 6;
+
+  fs::FS *mountpoint = getFS((char *)data+m);
+
+  if (mountpoint == 0)
+  {
+      RPC_ERR(3, (String("Nonexistant filesystem ") + String((char *)data+m)).c_str());
+  }
 
   File file;
+  //Skip the first slash if any(Assume mountpoint name is at least 2 chars)
+  //Then get the slash after that.
+  char *fn = strchr((char *)data + m+1, '/');
 
-  file = SPIFFS.open((char *)data + 6 + m, "w");
+  file = mountpoint->open(fn, "w");
 
   if (!file)
   {
     file.close();
-    RPC_ERR(3, (char *)data + 6 + m);
+    RPC_ERR(3, (char *)data + m);
   }
 
 #ifdef ESP32
   if (file.isDirectory())
   {
     file.close();
-    RPC_ERR(1, "Selected file is a directory");
+    //eVERYTHING AND NOTHING IS DIR ON SPIFFS!!!!
+    if (mountpoint != &SPIFFS)
+    {
+      RPC_ERR(1, (String("Selected path ") + String(fn) + String("is a directory")).c_str());
+    }
   }
 #endif
   int x = 0;
 
-  file.write((uint8_t *)data + 6, m);
+  file.write((uint8_t *)data, m);
   file.close();
   return 0;
 }
@@ -137,14 +218,25 @@ int rpcfswriteinto(void *data, unsigned int datalen, KnownClient *client, void *
   unsigned int pos = readUnsignedNumber(data, 4);
   unsigned int m = readUnsignedNumber(data + 4, 2);
 
-  File file;
-  if (SPIFFS.exists((char *)data + 6 + m))
+  fs::FS *mountpoint = getFS((char *)data +m+ 6);
+  //Skip the first slash if any(Assume mountpoint name is at least 2 chars)
+  //Then get the slash after that.
+  char *fn = strchr((char *)data + m + 7, '/');
+
+  if (mountpoint == 0)
   {
-    file = SPIFFS.open((char *)data + 6 + m, "r+");
+      RPC_ERR(3, (String("Nonexistant filesystem ") + String((char *)data+m)).c_str());
+  }
+  data += 6;
+
+  File file;
+  if (mountpoint->exists(fn))
+  {
+    file = mountpoint->open(fn, "r+");
     if (file.size() <= pos)
     {
       file.close();
-      file = SPIFFS.open((char *)data + 6 + m, "a");
+      file = mountpoint->open(fn, "a");
     }
     else
     {
@@ -153,7 +245,7 @@ int rpcfswriteinto(void *data, unsigned int datalen, KnownClient *client, void *
   }
   else
   {
-    file = SPIFFS.open((char *)data + 6 + m, "w+");
+    file = mountpoint->open(fn, "w+");
   }
 
   if (!file)
@@ -166,7 +258,11 @@ int rpcfswriteinto(void *data, unsigned int datalen, KnownClient *client, void *
   if (!file || file.isDirectory())
   {
     file.close();
-    RPC_ERR(1, "Selected path is a directory");
+    //eVERYTHING AND NOTHING IS DIR ON SPIFFS!!!!
+    if (mountpoint != &SPIFFS)
+    {
+      RPC_ERR(1, (String("Selected path ") + String(fn) + String("is a directory")).c_str());
+    }
   }
 #endif
 
@@ -181,7 +277,18 @@ int rpcfswriteinto(void *data, unsigned int datalen, KnownClient *client, void *
 int rpcfsdelete(void *data, unsigned int datalen, KnownClient *client, void *rbuffer, unsigned int *rlen)
 {
   *rlen = 0;
-  SPIFFS.remove((char *)data);
+
+  fs::FS *mountpoint = getFS((char *)data + 6);
+  //Skip the first slash if any(Assume mountpoint name is at least 2 chars)
+  //Then get the slash after that.
+  char *fn = strchr((char *)data + 6, '/');
+
+  if (mountpoint == 0)
+  {
+    RPC_ERR(3, "That device does not exist or is disconnected.");
+  }
+
+  mountpoint->remove(fn);
   return 0;
 }
 
@@ -191,30 +298,59 @@ int rpcfslist(void *data, unsigned int datalen, KnownClient *client, void *rbuff
 
   //Min entry index to start listing at
   unsigned int m = readUnsignedNumber(data, 2);
+  data += 2;
 
-  int count = -1;
+  if (strlen((char *)data) == 1)
+  {
+    //hardcoded response. Note that SD card might not exist.
+    //TODO: Properly detect missing SD card
+    if (((char *)data)[0] == '/')
+    {
+      strcpy((char *)rbuffer, "\x02spiffs\x02sd");
+      rlen[0] = 10;
+      return 0;
+    }
+  }
+
+  //Skip the first slash if any(Assume mountpoint name is at least 2 chars)
+  //Then get the slash after that.
+  char *fn = strchr((char *)data + 1, '/');
+  if (fn == 0)
+  {
+    RPC_ERR(3, "Impossible filename does not contain a root directory");
+  }
+
+  fs::FS *mountpoint = getFS((char *)data);
+  if (mountpoint == 0)
+  {
+    RPC_ERR(3, "That device does not exist or is disconnected.");
+  }
+
+  int count = 0;
 #ifdef ESP32
-  File d = SPIFFS.open((char *)data + 2);
+  File d = mountpoint->open(fn);
 #else
-  if (SPIFFS.exists((char *)data + 2) == false)
+  if (mountpoint->exists(fn) == false)
   {
     RPC_ERR(3, "Selected dir does not exist");
   }
-  Dir d = SPIFFS.openDir((char *)data + 2);
+  Dir d = mountpoint->openDir(fn);
 #endif
 
-  int dirnamelen = strlen((char *)data + 2);
+  //Start from end if string
+  int dirnamelen = strlen(fn);
 
   //Get rid of the trailing slash that seems to mess things up
-  if ((((char *)data + 1 + dirnamelen)[0]) == '/')
+  //While we're at it
+  if (fn[dirnamelen - 1] == '/')
   {
-    ((char *)data + 1 + dirnamelen)[0] = 0;
+    fn[dirnamelen - 1] = 0;
   }
 
 #ifdef ESP32
   if (!d)
   {
-    RPC_ERR(3, "Selected dir does not exist");
+    RPC_ERR(3, ("Selected dir " + String((char *)data + 2) + " does not exist").c_str());
   }
 
   if (!d.isDirectory())
@@ -228,43 +364,45 @@ int rpcfslist(void *data, unsigned int datalen, KnownClient *client, void *rbuff
   File f = d.openFile("r");
 #endif
 
+  String l = "";
   while (f && (rlen[0] < 1024))
   {
-    count += 1;
-
-    if (count < m)
+    if (l == f.name())
     {
-      continue;
+      return 0;
     }
-
-    //Get rid of the prefix part
-    strcpy((char *)rbuffer + 1, f.name() + dirnamelen + 1);
-
+    l = f.name();
+    if (count >= m)
+    {
+      strcpy((char *)rbuffer + 1, ((char *)f.name()) + 1);
 //I don't think ESP8266 SPIFFS has true directories
 #ifdef ESP32
-    if (f.isDirectory())
+      if (f.isDirectory())
 #else
-    if (0)
+      if (0)
 #endif
-    {
-      *(char *)rbuffer = 2;
-    }
-    else
-    {
-      *(char *)rbuffer = 1;
+      {
+        *(char *)rbuffer = 2;
+      }
+      else
+      {
+        *(char *)rbuffer = 1;
+      }
+
+      //Plus 1 for typecode, plus 1 for null
+      rlen[0] += strlen(f.name() + 1) + 2;
+      rbuffer += (strlen(f.name() + 1) + 2);
     }
 
-    //Plus 1 for typecode, plus 1 for null, plus 3 for reasons I don't understand
-    rlen[0] += strlen(f.name() - (dirnamelen + 1)) + 6;
-    rbuffer += strlen(f.name() - (dirnamelen + 1)) + 6;
 #ifdef ESP32
     f = d.openNextFile();
 #else
     d.next();
     f = d.openFile("r");
 #endif
-  }
 
+    count += 1;
+  }
   return 0;
 }
 
@@ -308,7 +446,6 @@ void PavillionServer::addRPC(uint16_t number, char *fname, int (*function)(void 
 
 void PavillionServer::doRPC(uint16_t number, KnownClient *client, void *data, uint16_t datalen, uint64_t callid)
 {
-
   //For convenience of accepting strings, the byte after the last char is a null.
   ((uint8_t *)data)[datalen] = 0;
   unsigned int rlen = 0;
@@ -319,7 +456,7 @@ void PavillionServer::doRPC(uint16_t number, KnownClient *client, void *data, ui
   {
     writeUnsignedNumber(rbuffer + 8, 2, 0);
     writeUnsignedNumber(rbuffer, 8, callid);
-
+    memcpy(rbuffer + 10, data, datalen);
     client->sendRawEncrypted(5, (uint8_t *)rbuffer, datalen + 10);
     return;
   }
@@ -330,7 +467,7 @@ void PavillionServer::doRPC(uint16_t number, KnownClient *client, void *data, ui
     while (s->next)
     {
       s = s->next;
-      if (s->index == readUnsignedNumber(data,2))
+      if (s->index == readUnsignedNumber(data, 2))
       {
         rlen = strlen(s->fname);
         strcpy(rbuffer + 10, s->fname);
@@ -353,12 +490,13 @@ void PavillionServer::doRPC(uint16_t number, KnownClient *client, void *data, ui
     {
       writeUnsignedNumber(rbuffer + 8, 2, s->function(data, datalen, client, rbuffer + 10, &rlen));
       writeUnsignedNumber(rbuffer, 8, callid);
+      dbgn(((uint64_t *)rbuffer)[0]);
       client->sendRawEncrypted(5, (uint8_t *)rbuffer, rlen + 10);
       return;
     }
   }
   char *rbuffer2 = (char *)malloc(32);
-  memcpy(rbuffer2,"0000000000NonexistentFunction",29);
+  memcpy(rbuffer2, "0000000000NonexistentFunction", 29);
   rlen = 19;
   *((uint16_t *)(rbuffer2 + 8)) = 2;
   *(uint64_t *)rbuffer2 = callid;

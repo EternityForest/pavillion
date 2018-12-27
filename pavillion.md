@@ -289,7 +289,8 @@ Write into an existing file at position, Position may point to one byte past the
 Arg str is simply an unterminated file path. Return an empty string if the file was deleted or did not exist.
 
 ### 14: List
-Arg str is a u16 followed by an unterminated filename. Return as many dir entries as possible starting at the nth entry.
+Arg str is a u16 followed by an unterminated filename that should end with a slash.
+Returns as many dir entries as possible starting at the nth entry.
 
 Entries are a filename, prefixed by a one byte typecode and separated by nulls. 1=file, 2=dir.
 
