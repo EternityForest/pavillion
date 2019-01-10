@@ -24,7 +24,7 @@ rerrs = {
     3: BadInput,
     4: NonexistentFile
 }
-debug_mode = 0
+debug_mode = 1
 def dbg(*a):
     if debug_mode:
         print (a)
@@ -162,6 +162,7 @@ class _RemoteServer():
                         if counter == self.unusedOutOfOrderCounterValue:
                             self.unusedOutOfOrderCounterValue = None
                         else:
+                            dbg("Ignoring old msg with opcode and counter",opcode, counter)
                             return
                 
                     if counter > self.server_counter+1:
@@ -250,6 +251,7 @@ class _RemoteServer():
                                     self.sessionID = clientobj.cipher.keyedhash(clientobj.key, clientobj.psk)[:16]
 
                                     clientobj.handle().onServerConnect(addr,None)
+                                    dbg("Server considered connected")
 
                             else:
                                 dbg(servernonce+challenge,clientobj.psk)
@@ -276,6 +278,7 @@ class _RemoteServer():
                         p = clientobj.cipher.pubkey_encrypt(p, n,clientobj.server_pubkey,clientobj.keypair[1])
                         self.sendSetup(0, 12, clientobj.clientID+m+n+p,addr=addr)
                         clientobj.handle().onServerConnect(addr,clientobj.server_pubkey)
+                        dbg("sending ecc cinfo")
 
 
 
@@ -307,6 +310,13 @@ class _Client():
         
         if daemon is None:
             daemon=pavillion.daemon
+
+   
+        #Last time we were known to be connected
+        #We're trying to pretend to be connectionless, so
+        #this is really just a guess of if there's at least one
+        #server connected
+        self.connectedAt =0
 
         #The address of our associated server
         self.server_address = address
@@ -517,8 +527,6 @@ class _Client():
 
     def sendSecure(self, counter, opcode, data,addr=None):
         "Send a secured packet"
-        dbg("sending",counter)
-        dbg("withkey",self.key[0])
         self.lastSent = time
         q = struct.pack("<Q",counter)
         n = b'\x00'*(24-8)+struct.pack("<Q",counter)
@@ -579,15 +587,16 @@ class _Client():
                 try:
                     msg,addr = sock.recvfrom(4096)
                 except socket.timeout:
-                    #Send keepalive messages, remove those who have not
-                    #responded for 240s, which is probably about 6 packets.
-
-                    if time.time()-l>30:
-                        l=time.time()
-                        self._doKeepAlive()
-                        with self.subslock:
-                            self._cleanSubscribers()
                     continue
+
+                #Send keepalive messages, remove those who have not
+                #responded for 240s, which is probably about 6 packets.
+                #Do cleanups
+                if time.time()-l>30:
+                    l=time.time()
+                    self._doKeepAlive()
+                    with self.subslock:
+                        self._cleanSubscribers()
 
                 try:
                     if addr in self.known_servers:
@@ -597,8 +606,8 @@ class _Client():
                             if len(self.known_servers)>self.max_servers:
                                 x = sorted(self.known_servers.values(), key=lambda x:x.secure_lastused)[0]
 
-                                #Delete the oldest client, but don't delete active clients.
-                                #This is a DoS issue. By making many fake clients you can fill the slots
+                                #Delete the oldest server, but don't delete active server.
+                                #This is a DoS issue. By making many fake server you can fill the slots
                                 #And it takes 3 seconds to get rid of them.
                                 if (x.secure_lastused<time.time()-300) and (x.lastused<time.time()-3):
                                     del self.known_servers[x.machine_addr]
@@ -623,9 +632,16 @@ class _Client():
 
     def onMessage(self,addr,counter,opcode,data):
         dbg("Got app msg opcode:",opcode)
+        self.connectedAt = time.time()
+
         #If we've recieved an ack or a call response
         if opcode==0:
             print(data,addr)
+
+        #Client accept message
+        if opcode==16:
+            pass
+        
 
 
         #Some stuff is common to messages and RPC calls
@@ -670,6 +686,7 @@ class _Client():
         #So we do that at a lower level.
         if  opcode==1:
             d = data.split(b'\n',2)
+            dbg("Got reliable message",d[0],d[1])
             #If we have a listener for that message target
             if d[0].decode('utf-8') in self.messageTargets:
 
@@ -771,7 +788,8 @@ class _Client():
 
            By default, it will 
         """
-        retry = retry or 0.075
+        retry = retry or 1
+
         if name in self.averageResponseTimes:
             #We can go to 8x faster than the specified retry time if the algorithm says to retry faster.
             #The algorithm being to go 2.5 standard deviations above what we expect
@@ -782,14 +800,21 @@ class _Client():
                 delay = min(retry,(self.averageResponseTimes[name]*1.5))
         else:
             delay = retry
+        
+        #If we think the connection is invalid, we increase the delay,
+        #Because it's going to probably fail and have to setup a new connection
+        if self.connectedAt<(time.time()-120):
+            delay=1.5 
+
+
         timeout = timeout or self.timeout
         start = time.time()
         callset = []
         while time.time()-start<timeout:
             try:
-                x= self._call(name,data,retry,callset=callset)
+                x= self._call(name,data,delay,callset=callset)
                 totaltime = time.time()-start
-
+                dbg("RPC response time was", totaltime)
                 #Calculate approximate average and std deviation
                 if name in self.averageResponseTimes:
                     #Assumptions: nothing is ever deleted from the dict, and 
@@ -830,6 +855,7 @@ class _Client():
         w = common.ReturnChannel()
         if not callset==None:
             callset.append(w)
+        dbg("Making rpc call with counter and timeout", counter,timeout)
         self.waitingForAck[counter] =w
         self.send(counter, 4, struct.pack("<H",name)+data)
 

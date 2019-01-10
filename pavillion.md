@@ -147,7 +147,7 @@ Same as above, but for unsubscribing.
 #### Opcode 15
 
 #### Opcode 16(Client Accept)
-The actual message content is reserved. This message indicates to the client that the secure connection
+The actual message content is reserved and so should be empty. This message indicates to the client that the secure connection
 was correctly established and may provide more info in the future.
 
 ### Reliable Messaging 
@@ -317,7 +317,32 @@ call with 255 to set a pin high, 0 to set low, and anything else to trigger PWM 
 ### 23: analogRead(pin)
 Returns a 4 byte signed number that is the digital value.
 
+### 24: getConfig(key)
+Return the string "config option" for the null-terminated string key.
 
+### 25: setConfig(key, value)
+All parameters are null terminated strings. Returns 0 bytes, and sets the config option given.
+
+
+
+## Config
+
+Application specific config options should be in the "app" category. No category or key may contain special
+chars.
+
+### The "system" Category:
+
+#### system.posixtz
+A POSIX timezone string representing the current timezone. This is a simplified interface
+and small embedded devices may use this value as the only source of timezone information.
+
+#### system.timezone
+The sys default timezone in Olson format, as in "US/Pacific"
+
+### The "timezones" category:
+
+Every entry's key must be an timeszone. followed by an Olson timezone,
+and every value must be a POSIX timezone string.
 
 ## Error codes
 

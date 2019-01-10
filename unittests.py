@@ -336,7 +336,7 @@ if __name__ == '__main__':
                 self.assertEqual(len(incoming),0)
 
                 del s
-                time.sleep(1)
+                time.sleep(3)
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Assert that the server can be cleaned up by the usual weakref methods
@@ -642,9 +642,9 @@ if __name__ == '__main__':
                 self.assertEqual(len(incoming2),0)
 
 
-
+                #Test deleting them and letting them clean up after themselves.
                 del s
-                time.sleep(1)
+                time.sleep(3)
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Assert that the server can be cleaned up by the usual weakref methods
@@ -657,7 +657,7 @@ if __name__ == '__main__':
                 self.assertEqual(len(incoming2),0)
 
                 del s2
-                time.sleep(1)
+                time.sleep(3)
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Now test deleting the second server
