@@ -24,7 +24,7 @@ rerrs = {
     3: BadInput,
     4: NonexistentFile
 }
-debug_mode = 1
+debug_mode = 0
 def dbg(*a):
     if debug_mode:
         print (a)

@@ -1,5 +1,6 @@
 from pavillion import *
 import pavillion
+import gc
 
 #Make it able to exit faster?
 pavillion.daemon = True
@@ -118,7 +119,8 @@ if __name__ == '__main__':
 
 
                 del s
-                time.sleep(1)
+                time.sleep(0.1)
+                gc.collect()
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Assert that the server can be cleaned up by the usual weakref methods
@@ -167,7 +169,8 @@ if __name__ == '__main__':
 
 
                 del s
-                time.sleep(1)
+                time.sleep(0.1)
+                gc.collect()
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Assert that the server can be cleaned up by the usual weakref methods
@@ -212,7 +215,7 @@ if __name__ == '__main__':
 
 
                 del s
-                time.sleep(1)
+                gc.collect()
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Assert that the server can be cleaned up by the usual weakref methods
@@ -336,7 +339,7 @@ if __name__ == '__main__':
                 self.assertEqual(len(incoming),0)
 
                 del s
-                time.sleep(3)
+                gc.collect()
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Assert that the server can be cleaned up by the usual weakref methods
@@ -403,7 +406,8 @@ if __name__ == '__main__':
                 self.assertEqual(len(incoming2),0)
 
                 del s
-                time.sleep(1)
+                time.sleep(0.1)
+                gc.collect()
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Assert that the server can be cleaned up by the usual weakref methods
@@ -416,7 +420,8 @@ if __name__ == '__main__':
                 self.assertEqual(len(incoming2),0)
 
                 del s2
-                time.sleep(1)
+                time.sleep(0.1)
+                gc.collect()
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Now test deleting the second server
@@ -517,7 +522,9 @@ if __name__ == '__main__':
 
 
                 del s
-                time.sleep(1)
+                time.sleep(0.1)
+                gc.collect()
+
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Assert that the server can be cleaned up by the usual weakref methods
@@ -644,7 +651,8 @@ if __name__ == '__main__':
 
                 #Test deleting them and letting them clean up after themselves.
                 del s
-                time.sleep(3)
+                time.sleep(0.1)
+                gc.collect()
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Assert that the server can be cleaned up by the usual weakref methods
@@ -657,7 +665,8 @@ if __name__ == '__main__':
                 self.assertEqual(len(incoming2),0)
 
                 del s2
-                time.sleep(3)
+                time.sleep(0.1)
+                gc.collect()
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 #Now test deleting the second server

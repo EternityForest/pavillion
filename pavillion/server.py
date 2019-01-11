@@ -426,6 +426,7 @@ class _Server():
                 if self in common.cleanup_refs:
                     common.cleanup_refs.remove(self)
         try:
+            self.sock.close()
             self.sendsock.close()
         except:
             pass
@@ -643,7 +644,8 @@ class _Server():
                 except socket.timeout:
                     continue
                 except:
-                    print(traceback.format_exc())
+                    if self.running:
+                        print(traceback.format_exc())
                 if addr in self.ignore:
                     continue
 
@@ -673,9 +675,9 @@ class _Server():
                 except:
                     pavillion_logger.exception("Exception in server loop")
 
-        #Close sock at end
-        self.sock.close()
         try:
+            #Close sock at end
+            self.sock.close()
             self.sendsock.close()
         except:
             pass
@@ -703,3 +705,8 @@ class Server():
     
     def close(self):
         self.server.close()
+    def __del__(self):
+        try:
+            self.close()
+        except:
+            pass
