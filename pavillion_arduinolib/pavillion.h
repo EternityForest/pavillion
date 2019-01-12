@@ -40,6 +40,7 @@ void writeUnsignedNumber(void *i, int len, uint64_t val);
 #define PAV_OP_MESSAGEACK 2
 #define PAV_OP_UNRELIABLE 3
 #define PAV_OP_RPC 4
+#define PAV_OP_QUIT 12
 
 
 #ifdef ESP32
@@ -51,7 +52,7 @@ void writeUnsignedNumber(void *i, int len, uint64_t val);
 
 #include <WiFiUdp.h>
 
-#define PAVILLIONDEBUG
+//#define PAVILLIONDEBUG
 
 
 #ifdef PAVILLIONDEBUG
@@ -92,6 +93,13 @@ class KnownClient
     uint64_t counter[3] = {0, 0, 0};
     bool ack_responded=false;
     uint64_t ack_watch = 0;
+
+    //Retry delay for anything we need
+    //A response from the client for, in ms
+    float defaultretrydelay = 250;
+    //Used by things that expect responses,
+    //To track when the last time was.
+    long long _lastAttempt = 0;
 
     uint16_t port;
     IPAddress addr;

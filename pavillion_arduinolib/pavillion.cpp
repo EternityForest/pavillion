@@ -249,7 +249,13 @@ void PavillionServer::broadcastMessage(const char *target, const char *name, uin
 
   PAV_LOCK();
 
-  int d = 2;
+  //How long to delay before polling if it's time to try again.
+  //We don't do exponential backoff individually.
+  //We do a global exponential, and we try
+  //with individual servers at a rate that is the slower
+  //of that client's specific calculated delay
+  //and the current global delay
+  float d = 10;
 
   int tlen = strlen(target);
   int nlen = strlen(name);
@@ -268,8 +274,25 @@ void PavillionServer::broadcastMessage(const char *target, const char *name, uin
       if (opcode == PAV_OP_RELIABLE)
       {
         knownClients[i]->ack_watch = knownClients[i]->counter[2];
-        knownClients[i]->ack_responded = false;
+        //This constantly falls but each extra retry bumps it back up.
+        knownClients[i]->defaultretrydelay*= 0.97;
+
+
+        //If it's been a long time, assume network conditions could have changed
+        //So we try a little faster if we had been going ultra slowly
+        if((millis()-knownClients[i]->_lastAttempt)>30*1000)
+        {
+          if( knownClients[i]->defaultretrydelay> 250)
+          {
+           knownClients[i]->defaultretrydelay = 250;
+          }
+        }
+        knownClients[i]->_lastAttempt = 0;
       }
+
+      //Even if only doing one round, set it false,
+      //We use it to decide who to sent to
+      knownClients[i]->ack_responded = false;
     }
   }
 
@@ -285,38 +308,74 @@ void PavillionServer::broadcastMessage(const char *target, const char *name, uin
         dbg("Is a client");
         if ((millis() - knownClients[i]->lastSeen) < 300000)
         {
-          dbg("Found client to send bcast to:");
-          dbg(knownClients[i]->addr);
-          dbg(knownClients[i]->port);
-          //Our garbage fake version of libsodium needs 32 extra bytes after the output buffer so it doesn't crash.
-          uint8_t *op = (uint8_t *)malloc(len + tlen + nlen + 2 + 33 + 11 + 8 + 1 + 32);
-          if (op == 0)
+          if(knownClients[i]->ack_responded==false)
           {
-            continue;
+
+            if((millis()- knownClients[i]->_lastAttempt)< knownClients[i]->defaultretrydelay)
+            {
+              //Hasn't been long enough to try again with that client
+              continue;
+            }
+
+
+            //Automatic retransmit delay optimization
+            if (opcode == PAV_OP_RELIABLE)
+            {
+              //Every attempt after the first increases the 
+              //delay, because the goal is to only have one attempt
+              //But still have the min time.
+              //So it slowly creeps down and gets increased by attempts.
+
+              //Note that it increases by 3 percent and decreases by 12 They're different
+              //So it doesn't get locked to a set of discrete steps as much.
+              //The numbers after the decimal are arbitrary.
+
+              //This also has the effect that any time a packet is lost,
+              //We slow down a tiny bit, which may help with congesyion control.
+              //Is ithis the first attempt to send this particular message?
+              if(knownClients[i]->_lastAttempt)
+              {
+                knownClients[i]->defaultretrydelay*= 1.12567565;
+              }
+              if(knownClients[i]->defaultretrydelay>500)
+              {
+                knownClients[i]->defaultretrydelay= 500;
+              }
+              knownClients[i]->_lastAttempt =millis();
+            }
+            dbg("Found client to send bcast to:");
+            dbg(knownClients[i]->addr);
+            dbg(knownClients[i]->port);
+            //Our garbage fake version of libsodium needs 32 extra bytes after the output buffer so it doesn't crash.
+            uint8_t *op = (uint8_t *)malloc(len + tlen + nlen + 2 + 33 + 11 + 8 + 1 + 32);
+            if (op == 0)
+            {
+              continue;
+            }
+            uint8_t *encrypted = op + 11 + 8;
+
+            memcpy(op, "PavillionS0", 11);
+
+            //copy
+            memcpy((op + 11), (unsigned char *)(&(knownClients[i]->counter[2])), 8);
+
+            //This is the opcode
+            op[11 + 8] = opcode;
+
+            memcpy((op + 11 + 9), target, tlen);
+            op[9 + 11 + tlen] = '\n';
+            memcpy((op + 11 + 9) + tlen + 1, name, nlen);
+            op[9 + 11 + tlen + 1 + nlen] = '\n';
+
+            memcpy((op + 11 + 9 + tlen + 1 + nlen + 1), data, len);
+
+            crypto_secretbox_easy(encrypted, encrypted,
+                                  len + tlen + nlen + 2 + 1, (uint8_t *)&(knownClients[i]->counter[0]),
+                                  knownClients[i]->skey);
+
+            sendUDP(op, len + tlen + nlen + 2 + 16 + 8 + 1 + 11, knownClients[i]->addr, knownClients[i]->port);
+            free(op);
           }
-          uint8_t *encrypted = op + 11 + 8;
-
-          memcpy(op, "PavillionS0", 11);
-
-          //copy
-          memcpy((op + 11), (unsigned char *)(&(knownClients[i]->counter[2])), 8);
-
-          //This is the opcode
-          op[11 + 8] = opcode;
-
-          memcpy((op + 11 + 9), target, tlen);
-          op[9 + 11 + tlen] = '\n';
-          memcpy((op + 11 + 9) + tlen + 1, name, nlen);
-          op[9 + 11 + tlen + 1 + nlen] = '\n';
-
-          memcpy((op + 11 + 9 + tlen + 1 + nlen + 1), data, len);
-
-          crypto_secretbox_easy(encrypted, encrypted,
-                                len + tlen + nlen + 2 + 1, (uint8_t *)&(knownClients[i]->counter[0]),
-                                knownClients[i]->skey);
-
-          sendUDP(op, len + tlen + nlen + 2 + 16 + 8 + 1 + 11, knownClients[i]->addr, knownClients[i]->port);
-          free(op);
         }
       }
     }
@@ -402,20 +461,21 @@ void PavillionServer::onApplicationMessage(IPAddress addr, uint16_t port, uint64
   //subtract Header, counter, opcode, auth tag
   datalen -= (11 + 8 + 1 + 16);
 
+  if(opcode== PAV_OP_QUIT)
+  {
+    //Don't actually delete it, we might need it again,
+    //But set the timestamp to 0 so it's marked first in line,
+    //And marked no longer included when sending broadcasts.
+    client->lastSeen=0;
+  }
+
   if (opcode == PAV_OP_MESSAGEACK)
   {
     if (client->ack_watch == readUnsignedNumber(data, 8))
     {
+      dbg("Recieved message ack");
       client->ack_responded = true;
     }
-  }
-
-  //We don't have code to actually understand messages, but we can acknowledge
-  //Them, because that's how keepalives work
-  if (opcode == PAV_OP_RELIABLE)
-  {
-    dbg("Sending acknowledgement");
-    client->sendRawEncrypted(2, (uint8_t *)&counter, 8);
   }
 
 //This feature is only for non-rtos platforms.
@@ -452,7 +512,6 @@ void PavillionServer::onApplicationMessage(IPAddress addr, uint16_t port, uint64
 //Handle raw UDP Messages
 void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uint16_t port)
 {
-
   //Make sure it has the header
   if (memcmp(data, "PavillionS0", 11))
   {
@@ -491,6 +550,18 @@ void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uin
         return;
       }
     }
+
+
+    //We don't have code to actually understand messages, but we can acknowledge
+    //Them, because that's how keepalives work
+    //Note that this happens *before* the duplicate check.
+    //We do actually want to ack duplicates
+    if (data[0] == PAV_OP_RELIABLE)
+    {
+      dbg("Sending acknowledgement");
+      sendRawEncrypted(2, (uint8_t *)&counter, 8);
+    }
+
 
     //Make sure there's not a duplicate
     if (counter <= clientcounter)

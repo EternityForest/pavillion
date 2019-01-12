@@ -163,6 +163,7 @@ class _RemoteServer():
                             self.unusedOutOfOrderCounterValue = None
                         else:
                             dbg("Ignoring old msg with opcode and counter",opcode, counter)
+                            print("dup")
                             return
                 
                     if counter > self.server_counter+1:
@@ -555,8 +556,9 @@ class _Client():
                 pass
 
     def _doKeepAlive(self):
-        if self._keepalive_time<time.time()-30:
+        if self._keepalive_time<time.time()-25:
             try:
+                print("ka")
                 self.sendMessage('','',b'', reliable=False)
             except:
                 pavillion_logger.exception("Error sending keepalive")
@@ -589,14 +591,6 @@ class _Client():
                 except socket.timeout:
                     continue
 
-                #Send keepalive messages, remove those who have not
-                #responded for 240s, which is probably about 6 packets.
-                #Do cleanups
-                if time.time()-l>30:
-                    l=time.time()
-                    self._doKeepAlive()
-                    with self.subslock:
-                        self._cleanSubscribers()
 
                 try:
                     if addr in self.known_servers:
@@ -626,7 +620,15 @@ class _Client():
 
                 except:
                     logging.exception("Exception in client loop")
-        
+            #Send keepalive messages, remove those who have not
+            #responded for 240s, which is probably about 6 packets.
+            #Do cleanups
+            if time.time()-l>30:
+                l=time.time()
+                self._doKeepAlive()
+                with self.subslock:
+                    self._cleanSubscribers()
+
         #Close socket at loop end
         self.sock.close()
 

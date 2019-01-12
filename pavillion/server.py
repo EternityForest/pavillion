@@ -166,6 +166,7 @@ class _ServerClient():
                         if counter == self.unusedOutOfOrderCounterValue:
                             self.unusedOutOfOrderCounterValue = None
                         else:
+                            print("dup")
                             return
                 
                 if counter > self.client_counter+1:
