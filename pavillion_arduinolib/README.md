@@ -135,3 +135,12 @@ uint64_t readUnsignedNumber(void * i,int len);
 //Interpret i as a pointer to an integer of length len and write the value
 void writeSignedNumber(void * i,int len, int64_t val);
 void writeUnsignedNumber(void * i,int len, uint64_t val);
+
+
+### Dynamic TX power
+Pavillion tries to use the minimum amount of power to achieve full speed. To 
+do this it needs an estimate of the access point's power. We default to 20dbm,
+because most APs run at full power. set `pavillionApTxPower` to 0 to disable it, or give it another
+value in dbm to make optimization more accurate.
+
+This only happens on the ESP8266 at the moment.

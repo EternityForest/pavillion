@@ -43,6 +43,36 @@ extern "C"
 
 static bool connected = false;
 
+//Estimate of the AP's TX power
+int pavillionApTxPower = 20;
+
+
+//Dynamically optimize the transmit power in real time
+//To maintain a -73dbm level at the reciever. This
+static void optimizeTXPower()
+{
+  #ifdef  ESP32
+  //TODO:Optimize the ESP8266
+  #else
+  if (pavillionApTxPower)
+  {
+    //With the user-supplied estimate, guess the path loss
+    int pathloss = pavillionApTxPower - WiFi.RSSI();
+    int txpwr = (-73)+pathloss;
+    if (txpwr>20)
+    {
+      txpwr=20;
+    }
+    if(txpwr<0)
+    {
+      txpwr=0;
+    }
+    //Assume path loss is symmetric, set the output power to produce -73dbm at the reciever
+    WiFi.setOutputPower(txpwr);
+  }
+  #endif
+}
+
 //Root entry of linked list of all PavillionServers
 static PavillionServer *ServersList = 0;
 
@@ -303,11 +333,15 @@ void PavillionServer::broadcastMessage(const char *target, const char *name, uin
     {
       dbg("searching");
       dbg(i);
+      //The array might include null pointers
       if (knownClients[i])
       {
         dbg("Is a client");
+        //If they've been gone for 300s, consider them disconnected
         if ((millis() - knownClients[i]->lastSeen) < 300000)
         {
+          //Don't send to clients that already acknowledged
+          //This message
           if(knownClients[i]->ack_responded==false)
           {
 
@@ -348,6 +382,8 @@ void PavillionServer::broadcastMessage(const char *target, const char *name, uin
             dbg(knownClients[i]->port);
             //Our garbage fake version of libsodium needs 32 extra bytes after the output buffer so it doesn't crash.
             uint8_t *op = (uint8_t *)malloc(len + tlen + nlen + 2 + 33 + 11 + 8 + 1 + 32);
+            
+            //Can't do much if the malloc fails
             if (op == 0)
             {
               continue;
@@ -873,6 +909,9 @@ void PavillionServer::poll()
     PAV_UNLOCK();
     return;
   }
+
+optimizeTXPower();
+
   int x = udp.parsePacket();
 
   if (x)

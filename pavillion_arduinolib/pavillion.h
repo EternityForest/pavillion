@@ -34,7 +34,7 @@ int64_t readSignedNumber(void *i, int len);
 uint64_t readUnsignedNumber(void *i, int len);
 void writeSignedNumber(void *i, int len, int64_t val);
 void writeUnsignedNumber(void *i, int len, uint64_t val);
-
+extern int pavillionApTxPower;
 
 #define PAV_OP_RELIABLE 1
 #define PAV_OP_MESSAGEACK 2
