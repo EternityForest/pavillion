@@ -120,6 +120,8 @@ General multicast application traffic uses port 1783 on multicast group 239.255.
 
 At the moment, we have secure reliable multicasting and unicasting with both ECC and preshared keys. Servers can accept "Guest" connections when using ECC, RPC calls are working.
 
-ESP32 and ESP8266 support is working, although the ESP8266 cannot currently send reliable messages(And will probably crash if you try). Unreliable messages and recieving messages are fine.
+ESP32 and ESP8266 support is working, although the ESP8266 reliable messaging function is blocking, and there's no message recieve support.
 
 Check out the unit tests for examples.
+
+Everything's still just barely usable, but it's really cool when it works!

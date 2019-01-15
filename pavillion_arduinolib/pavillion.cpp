@@ -52,7 +52,7 @@ int pavillionApTxPower = 20;
 static void optimizeTXPower()
 {
   #ifdef  ESP32
-  //TODO:Optimize the ESP8266
+  //TODO:Optimize the ESP32 also
   #else
   if (pavillionApTxPower)
   {
