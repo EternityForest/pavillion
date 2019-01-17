@@ -123,7 +123,7 @@ class _ServerClient():
                     self.client_counter = 0
                     self.send(self.counter, 11, b'')
                 else:
-                    self.server.onMessage(addr, counter,opcode,msg,self.clientID)
+                    self.server.onMessage(self, counter,opcode,msg,self.clientID)
                 return
             else:
                  raise ValueError("No valid header")
@@ -166,15 +166,17 @@ class _ServerClient():
                         if counter == self.unusedOutOfOrderCounterValue:
                             self.unusedOutOfOrderCounterValue = None
                         else:
-                            print("dup")
+                            if self.client_counter< counter-250:
+                                self.server.onOldMessage(self,counter,plaintext[0],plaintext[1:],self.clientID)
                             return
-                
-                if counter > self.client_counter+1:
-                    with self.server.lock:
-                        self.unusedOutOfOrderCounterValue = self.client_counter+1
                     
-                self.client_counter = counter
-                self.server.onMessage(addr,counter,plaintext[0],plaintext[1:],self.clientID)
+                    if counter > self.client_counter+1:
+                        with self.server.lock:
+                            self.unusedOutOfOrderCounterValue = self.client_counter+1
+                else:        
+                    self.client_counter = counter
+                
+                self.server.onMessage(self,counter,plaintext[0],plaintext[1:],self.clientID)
 
             #We don't know how to process this message. So we send
             #an unrecognized client
@@ -502,9 +504,19 @@ class _Server():
                     time.sleep(x)
                     self.rebroadcast( 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data,filt)
 
+    def onOldMessage(self,client, counter, opcode, data,clientID=None):
+        addr=client.address
+        if  opcode==1:
+            #No counter race conditions allowed
+            with self.lock:
+                #Do an acknowledgement
+                self.knownclients[addr].counter += 1
+                self.knownclients[addr].send(self.knownclients[addr].counter,2,struct.pack("<Q",counter))
 
-    def onMessage(self,addr, counter, opcode, data,clientID=None):
+
+    def onMessage(self,client, counter, opcode, data,clientID=None):
         "Handle a message after decoding"
+        addr = client.address
         #reliable message
         if  opcode==1:
             d = data.split(b'\n',2)

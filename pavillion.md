@@ -64,6 +64,9 @@ counter.
 
 ### Packet Types
 
+#### Counted and Uncounted
+An uncounted message is one that does not rely on the packet counter to prevent replay attacks.
+
 #### 1: Reliable Message
 Represents an MQTT or XMPP message with a name sent to a target(Akin to a topic). Message topics beginning with "core." are reserved.
 
@@ -87,6 +90,9 @@ else it is not possible to automatically retry them.
 The first 8 bytes represent the packet number of the RPC call being responded to. The next 2 represent a response typecode, where anything other than 0 indicates an error. 
 
 The remainder is the return data of the function call.
+
+This message is uncounted, because the matching counter serves as a challenge-response.
+If you allow multiple servers to respond to one call, take care in the implementation.
 
 
 

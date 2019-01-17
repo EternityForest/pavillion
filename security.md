@@ -16,6 +16,8 @@ Counter value 0 is reserved for protocol setup messages, which are sent unencryp
 
 The first byte of the payload is the opcode, which has a different meaning for packets with a 0 counter.
 
+
+
 ## PSK Security Model
 
 Every client has both a 16 byte "client ID" and a 32 byte preshared key. This client ID is arbitrary and should be considered like a username.
@@ -46,7 +48,9 @@ to avoid replay attacks.
 
 The client now knows that nonce goes to a trusted server. It sends an info packet signed with the PSK containing the nonce, which functions as the server's challenge. This packet also contains the client nonce, which unlike the server's is per-session and doesn't change until the client reboots.
 
-The info packet also contains the clients counter value, and the server does not accept packets older than this after setup.
+The info packet also contains the clients counter value, and the server does not accept packets older than this after setup,
+except in the case of uncounted packets, and some limited and side effect free actions that may be taken even on old messages.
+
 
 The client sends using a key derived from the PSK and it's nonce, meaning that if there are multiple servers listening on a multicast port, they can use the same key to recieve data.
 
@@ -54,7 +58,10 @@ The server's key is additionally derived from the server's nonce. Only one respo
 
 
 The client's idea of what the server's counter should be is set the first time it gets a message,
-because it could not be older than the key exchange. Thereafter messages must increment.
+because it could not be older than the key exchange. Thereafter messages must increment, and a node must not accept old messages.
+
+The exception is uncounted messages, which are special opcodes that have built-in resistance to replay attacks.
+These may be accepted at at any time and should not affect the counter state.
 
 ### Nonce Request(Client to server, Security opcode 1)
 When a client wants to send a message to a server, it first sends a Nonce Request, which is simply

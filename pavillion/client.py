@@ -8,6 +8,8 @@ from .common import nonce_from_number,pavillion_logger,DEFAULT_PORT,DEFAULT_MCAS
 from . import common
 import pavillion
 
+servers_by_skey =weakref.WeakValueDictionary()
+
 class RemoteError(Exception):
     pass
 
@@ -54,7 +56,7 @@ class _RemoteServer():
     """
 
 
-    def __init__(self,clientObject):
+    def __init__(self,clientObject, addr):
 
         #This is set on the first incoming message.
         #We trust it because we know it could not have been older than the key exchange
@@ -88,6 +90,8 @@ class _RemoteServer():
 
         #Last time we were known to be connected
         self.connectedAt =0
+
+        self.addr = addr
 
     def sendSetup(self, counter: int, opcode: int, data: bytes ,addr=None):
         "Send an unsecured packet"
@@ -136,19 +140,6 @@ class _RemoteServer():
                     opcode =msg2[0]
                     data=msg2[1:]
 
-
-                    #acknowlegement happens even for old messages, so long as they aren't too old.
-                    #That's why we do them here in this section.
-                    #We do this because if the ack gets lost they shouldn't just resend till it times out.
-                    if opcode == 1:
-                        if self.server_counter<(counter+250):
-                            #No counter race conditions allowed
-                            with clientobj.lock:
-                                #Do an acknowledgement. Send it unicast back where it came
-                                clientobj.counter += 1
-                                recievedcounter = clientobj.counter
-                            clientobj.send(recievedcounter,2,struct.pack("<Q",counter),addr)
-
                     #Duplicate protection, make sure the counter increments.
                     #Do some minor out-of-order counter value handling.
                     #If we detect that the counter has incremented by more than exactly 1,
@@ -158,24 +149,30 @@ class _RemoteServer():
                     #should be much better than none for now.
                     
                     #No race conditions here. This is only called from the one client thread
+                    
                     if self.server_counter>=counter:
                         if counter == self.unusedOutOfOrderCounterValue:
                             self.unusedOutOfOrderCounterValue = None
                         else:
-                            dbg("Ignoring old msg with opcode and counter",opcode, counter)
-                            print("dup")
-                            return
-                
-                    if counter > self.server_counter+1:
-                        self.unusedOutOfOrderCounter = self.server_counter+1
+                            dbg("old msg with opcode and counter",opcode, counter)
+                            #Pass it along to see if we can validate it at the application
+                            #level anyway, some opcodes have their own replay resistance
 
-                    self.server_counter = counter
+                            #Don't pass  super ancient ones though.
+                            if self.server_counter<(counter+250):
+                                clientobj.onOldMessage(addr,counter,opcode,data)
+                            return
+                    else:
+                        if counter > self.server_counter+1:
+                            self.unusedOutOfOrderCounter = self.server_counter+1
+                        self.server_counter = counter
+                    
 
                     #Any message at all that we can decrypt indicates a valid connection
                     self.connectedAt =time.time()
                     self.secure_lastused = time.time()
 
-                    clientobj.onMessage(addr,counter,opcode,data)
+                    clientobj.onMessage(self,counter,opcode,data)
 
                 #We don't know how to process this message. So we send
                 #a nonce request to the server
@@ -245,7 +242,13 @@ class _RemoteServer():
                                         return
                                     
                                     clientobj.usedServerNonces[servernonce] = True
+                                    if self.skey:
+                                        try:
+                                            del servers_by_skey[self.skey]
+                                        except:
+                                            pass
                                     self.skey = clientobj.cipher.keyedhash(clientobj.nonce+servernonce,clientobj.psk)
+                                    servers_by_skey[self.skey] = self
                                     #Any message they send can't have been older than this handshake,
                                     #So we accept all counter values.
                                     self.server_counter =0
@@ -280,14 +283,6 @@ class _RemoteServer():
                         self.sendSetup(0, 12, clientobj.clientID+m+n+p,addr=addr)
                         clientobj.handle().onServerConnect(addr,clientobj.server_pubkey)
                         dbg("sending ecc cinfo")
-
-
-
-                # print(msg,addr)
-                # x = parsePavillion(msg)
-                # print(x)
-                # if x:
-                #     self.onMessage(m,addr)
         else:
             unsecure = b'Pavillion0'
 
@@ -300,7 +295,7 @@ class _RemoteServer():
                 if opcode==11:
                     self.synced = True
                 else:
-                    clientobj.server.onMessage(addr, counter,opcode,msg)
+                    clientobj.server.onMessage(self, counter,opcode,msg)
                 return
 
             logging.warning("Bad header "+str(msg))
@@ -543,22 +538,22 @@ class _Client():
                 for i in self.knownSubscribers:
                     torm = []
                     for j in self.knownSubscribers[i]:
-                        if self.knownSubscribers[i](j)[1]<time.time()-240:
+                        if self.knownSubscribers[i][j]<time.time()-240:
                             torm.append(j)
                     for j in torm:
-                            self.knownSubscribers[i].pop(j)
-                            self.handle().onRemoveSubscriber(i,j)
+                        self.knownSubscribers[i].pop(j)
+                        self.handle().onRemoveSubscriber(i,j)
                     if not self.knownSubscribers[i]:
                         torm_o.append(i)
                 for i in torm_o:
                     del self.knownSubscribers[i]
             except:
+                print(traceback.format_exc())
                 pass
 
     def _doKeepAlive(self):
         if self._keepalive_time<time.time()-25:
             try:
-                print("ka")
                 self.sendMessage('','',b'', reliable=False)
             except:
                 pavillion_logger.exception("Error sending keepalive")
@@ -614,7 +609,7 @@ class _Client():
                                             del self.known_servers[x.machine_addr]
 
                             if not len(self.known_servers)>self.max_servers:
-                                self.known_servers[addr] = _RemoteServer(self)
+                                self.known_servers[addr] = _RemoteServer(self, addr)
                                 self.known_servers[addr].machine_addr = addr
                                 self.known_servers[addr].onRawMessage(msg,addr)
 
@@ -632,10 +627,49 @@ class _Client():
         #Close socket at loop end
         self.sock.close()
 
-    def onMessage(self,addr,counter,opcode,data):
+
+
+    def onOldMessage(self,addr, counter, opcode, data):
+        """Handles messages with old counter values, which could still 
+            be validated through opcode specific methods
+        """
+
+
+        #RPC Calls have a message counter that acts as a challenge,
+        #And we only ever accept one response for each,
+        #So we don't need to use the usual validation.
+
+        #Some stuff is common to messages and RPC calls
+        if opcode==2 or opcode==5:
+            #Get the message number it's an ack for
+            d = struct.unpack("<Q",data[:8])[0]
+            #acknowlegement happens even for old messages, so long as they aren't too old.
+            #That's why we do them here in this section.
+            #We do this because if the ack gets lost they shouldn't just resend till it times out.
+            if opcode == 1:
+                #No counter race conditions allowed
+                with clientobj.lock:
+                    #Do an acknowledgement. Send it unicast back where it came
+                    self.counter += 1
+                    self.send(self.counter,2,struct.pack("<Q",counter),addr)
+        
+            
+            #RPC Specific stuff
+            if opcode==5:
+                try:
+                    self.waitingForAck[d].onResponse(data[8:])
+                except KeyError:
+                    dbg("Nobody listening for that response counter val", d)
+                    pass
+                except Exception:
+                    print(traceback.format_exc(6))
+                    pass
+
+    def onMessage(self,server,counter,opcode,data):
         dbg("Got app msg opcode:",opcode)
         self.connectedAt = time.time()
 
+        addr = server.addr
         #If we've recieved an ack or a call response
         if opcode==0:
             print(data,addr)
@@ -643,7 +677,6 @@ class _Client():
         #Client accept message
         if opcode==16:
             pass
-        
 
 
         #Some stuff is common to messages and RPC calls
@@ -656,12 +689,14 @@ class _Client():
                 if d in self.waitingForAck:
                     #We've seen a subscriber for that target
                     if self.waitingForAck[d].target:
-                        self._seenSubscriber(addr,self.waitingForAck[d].target)
+                        self._seenSubscriber(server,self.waitingForAck[d].target)
+                    
+                    self.waitingForAck[d].onResponse(b'', server.skey)
+            
             #RPC Specific stuff
             elif opcode==5:
                 try:
-                    #Decrement the counter that started at 0
-                    self.waitingForAck[d].onResponse(data[8:])
+                    self.waitingForAck[d].onResponse(data[8:], server.skey)
                 except KeyError:
                     dbg("Nobody listening for that response counter val", d)
                     pass
@@ -684,15 +719,19 @@ class _Client():
                         def f():
                             i.callback(d[1].decode('utf-8') ,d[2],addr)
                         self.handle().execute(f)
-        #Handle S->C messages. Note that we send ack even for old messges, 
-        #So we do that at a lower level.
+
+        #Handle S->C messages.
         if  opcode==1:
             d = data.split(b'\n',2)
             dbg("Got reliable message",d[0],d[1])
+            
+            with self.lock:
+                #Do an acknowledgement. Send it unicast back where it came
+                self.counter += 1
+                self.send(self.counter,2,struct.pack("<Q",counter),addr)
+            
             #If we have a listener for that message target
             if d[0].decode('utf-8') in self.messageTargets:
-
-
                 s = self.messageTargets[d[0].decode('utf-8')]
                 with self.targetslock:
                     for i in s:
@@ -704,21 +743,23 @@ class _Client():
                         self.handle().execute(f)
         #Explicit subscribe         
         if opcode==13:
-             self._seenSubscriber(addr, data.decode("utf-8"))
+             self._seenSubscriber(server, data.decode("utf-8"))
 
         #Explicit unsubscribe         
         if opcode==14:
-             self._seenSubscriber(addr, data.decode("utf-8"))
+             self._seenSubscriber(server, data.decode("utf-8"))
 
 
 
 
-    #Call this with addr, target when you get an ACK from a packet you sent
+    #Call this with remoteserver, target when you get an ACK from a packet you sent
     #It uses a lock so it's probably really slow, but that's fine because
     #This protocol isn't meant for high data rate stuff.
 
+    #We use the key the server sends to us on as a convenient ID.
     #Also call it when you get a subscribe message
     def _seenSubscriber(self,s, t):
+        s = s.skey
         with self.subslock:
             if (not t in self.knownSubscribers) or( not s in self.knownSubscribers[t]):
                 self.handle().onNewSubscriber(t,s)
@@ -752,13 +793,20 @@ class _Client():
 
         if reliable:
             with self.subslock:
+                #Get the list of all the skeys of our subscribers
                 try:
-                    expected = len([ i for i in self.knownSubscribers[target] if self.knownSubscribers[target][i]>240])
-                except:
-                    expected = 1
+                    if target in self.knownSubscribers:
+                        expected = {i:1 for i in self.knownSubscribers[target] if self.knownSubscribers[target][i]>(time.time()-240)}
+                    else:
+                        expected = {0:0}
+                except :
+                    print(traceback.format_exc())
+                    expected = {0:0}
 
             e = threading.Event()
-            w = common.ExpectedAckCounter(e,expected)
+            #Tell it who to expect an ACK from
+            ecount = len(expected)
+            w = common.ExpectedAckTracker(e,expected)
             w.target = target
             self.waitingForAck[counter] =w
         
@@ -780,7 +828,7 @@ class _Client():
                 self.send(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data)
         if reliable:
             #Return how many subscribers definitely recieved the message.
-            return max(0,expected-w.counter)
+            return max(0,ecount-len(w.nodes))
         else:
             return
 

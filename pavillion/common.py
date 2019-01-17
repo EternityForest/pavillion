@@ -28,27 +28,38 @@ allow_new = True
 
 cleanup_refs = []
 
-
+import traceback
 class ReturnChannel():
+    """Node is supposed to be a secure ID of the node, preferably the session key they send to
+    us with"""
+
     def __init__(self,q=None):
         self.queue = q or queue.Queue(64)
         #It's not a message target thing
         self.target = None
     
-    def onResponse(self,data):
+    def onResponse(self,data, node=None):
         self.queue.put(data,True,3)
 
-class ExpectedAckCounter():
-    #TODO track specific servers
-    def __init__(self,e,counter):
+class ExpectedAckTracker():
+    def __init__(self,e,nodes):
         self.e = e
-        self.counter = counter
+        self.nodes = nodes.copy()
         self.target = None
 
-    def onResponse(self, data):
-        self.counter-=1
-        if not self.counter:
+    def onResponse(self, data,node):
+        try:
+            if node in self.nodes:
+                del self.nodes[node]
+            #Used to let you specify you want at least one ACK.
+            if 0 in self.nodes:
+                del self.nodes[0]
+        except:
+            pass
+        if  len(self.nodes)==0:
             self.e.set()
+
+
 
 class MessageTarget():
     def __init__(self,target,callback):
