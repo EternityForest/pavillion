@@ -76,7 +76,20 @@ Data area format:
 
 #### 2: Message Acknowledge
 Represents an acknowledgement of an `01 reliable message` packet, or another message type that expects acknowledgement.
-Data is the message counter for that packet.
+Data is the message counter for that packet, optionally followed by a server status message, which is a 3 byte sequence as follows. All further data bytes are reserved
+
+##### uint8 BatteryStatus
+Bits 0-5: Battery level from 0 to 63, where 0 indicates the device does not support battery status.
+Bits 6,7: 00: discharging, 01: slowCharging(Connected but discharging), 10: charging, 11: generating(More than using)
+
+##### uint8 NetworkStatus
+Value 0-100: RSSI+120, connected to WLAN
+Value 101-200: RSSI+(101+150), connected to WWAN
+Value 201: Wired
+Value 255: Unknown
+
+#### int8 Temperature
+Celcius temperature of the device itself.
 
 
 #### 3: Unreliable Message
@@ -155,6 +168,34 @@ Same as above, but for unsubscribing.
 #### Opcode 16(Client Accept)
 The actual message content is reserved and so should be empty. This message indicates to the client that the secure connection
 was correctly established and may provide more info in the future.
+
+#### Opcode 18 Binary Data Update
+This is a series of "records" in a format TBD, prefixed by a three byte device status.
+
+One record consists of a Record Class byte, the lower four bits of which indicate the data len,
+and the uppr four bits of which indicate the class.
+
+This is followed by a record type byte, and N bytes of data.
+
+All record types are currently reserved.
+
+
+The three byte device status is as follows:
+
+##### uint8 BatteryStatus
+Bits 0-5: Battery level from 0 to 63, where 0 indicates the device does not support battery status.
+Bits 6,7: 00: discharging, 01: slowCharging(Connected but discharging), 10: charging, 11: generating(More than using)
+
+##### uint8 NetworkStatus
+Value 0-100: RSSI+120, connected to WLAN
+Value 101-200: RSSI+(101+150), connected to WWAN
+Value 201: Wired
+Value 255: Unknown
+
+#### int8 Temperature
+Celcius temperature of the device itself.
+
+
 
 ### Reliable Messaging 
 

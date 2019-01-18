@@ -42,6 +42,13 @@ extern int pavillionApTxPower;
 #define PAV_OP_RPC 4
 #define PAV_OP_QUIT 12
 
+#define PAV_BATSTATUS_CHARGING 2* 64
+#define PAV_BATSTATUS_SLOWCHARGING 1* 64
+#define PAV_BATSTATUS_DISCHARGING 0* 64
+#define PAV_BATSTATUS_GENERATING 3* 64
+
+extern int pavillion_getTemperature();
+extern int pavillion_getBatteryStatus();
 
 #ifdef ESP32
 

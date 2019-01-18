@@ -45,6 +45,54 @@ def is_multicast(addr):
 import queue
 
 
+class ServerStatus():
+    def __init__(self,data):
+        batt, net, temp = data
+        blevel = batt%64
+        bstate = (batt-blevel)/64
+        if bstate==0:
+            self.batteryState="discharging"
+        if bstate==1:
+            self.batteryState="slowcharging"        
+        if bstate==2:
+            self.batteryState="charging"
+        if bstate==3:
+            self.batteryState="generating"
+        
+        if blevel == 0:
+            self.batteryState="unknown"
+
+        self.battery = (blevel/64)*100
+        #Avoid confusion due to low precision
+        if self.battery>98:
+            self.battery=100
+        self.temp = temp
+
+class NotConnected(Exception):
+    pass
+
+class RemoteServerInterface():
+    def __init__(self,s):
+        self._s = weakref.ref(s)
+    def _getServer(self):
+        s = self._s()
+        if not s:
+            raise NotConnected()
+        if not s.connectedAt>(time.time()-240):
+            raise NotConnected()
+        return s
+
+    def battery(self):
+        "Returns bettery in percent, or raises NotConnected"
+        return self._getServer().status().battery
+    
+    def batteryState(self):
+        "Returns bettery in percent, or raises NotConnected"
+        return self._getServer().status().batteryState
+    
+    def temperature(self):
+        "Returns bettery in percent, or raises NotConnected"
+        return self._getServer().status().temp
 
 class _RemoteServer():
     """This class is used to keep track of the remote servers.
@@ -92,6 +140,12 @@ class _RemoteServer():
         self.connectedAt =0
 
         self.addr = addr
+        #Raw status string data 
+        self._status = ServerStatus((0,255,0))
+
+    def status(self):
+        return self._status
+
 
     def sendSetup(self, counter: int, opcode: int, data: bytes ,addr=None):
         "Send an unsecured packet"
@@ -450,6 +504,12 @@ class _Client():
 
         t.start()
 
+
+        self._kathread = threading.Thread(target=self._keepAliveLoop)
+        self._kathread.daemon = True
+        self._kathread.name+=":PavillionClientKeepalive"
+        self._kathread.start()
+
         #Attempt to connect. The protocol has reconnection built in,
         #But this lets us connect in advance
         if self.psk and self.clientID:
@@ -498,13 +558,13 @@ class _Client():
         #TODO: decide if this is actually a good idea, and for what opcodes.
         try:
             if addr==None and len(self.known_servers)==1:
-                if self.lastActualBroadcast> time.time()-0.1:
+                if self.lastActualBroadcast> time.time()-3:
                     for i in self.known_servers:
                         addr = i
                 else:
                     self.lastActualBroadcast = time.time()
         except:
-            pass
+            print(traceback.format_exc())
         if self.psk or self.keypair:
             self.sendSecure(counter,opcode,data,addr)
         else:
@@ -554,7 +614,7 @@ class _Client():
     def _doKeepAlive(self):
         if self._keepalive_time<time.time()-25:
             try:
-                self.sendMessage('','',b'', reliable=False)
+                self.sendMessage('','',b'', reliable=True)
             except:
                 pavillion_logger.exception("Error sending keepalive")
             self._keepalive_time=time.time()
@@ -572,7 +632,6 @@ class _Client():
         "Main loop that should always be running in a thread"
         l = time.time()
         while(self.running):
-
             try:
                 if self.msock:
                     r,w,x = select.select([self.sock,self.msock],[],[],5)
@@ -615,19 +674,45 @@ class _Client():
 
                 except:
                     logging.exception("Exception in client loop")
-            #Send keepalive messages, remove those who have not
+            #remove those who have not
             #responded for 240s, which is probably about 6 packets.
             #Do cleanups
             if time.time()-l>30:
                 l=time.time()
-                self._doKeepAlive()
                 with self.subslock:
                     self._cleanSubscribers()
 
         #Close socket at loop end
         self.sock.close()
 
+    def _keepAliveLoop(self):
+        while self.running:
+            s = time.time()
+            try:
+                self._doKeepAlive()
+            except:
+                print(traceback.format_exc())
 
+            while(time.time()-s> 30):
+                if not self.running:
+                    return
+                time.sleep(1)
+
+    def getServers(self):
+        """Returns a list of servers indexed by address. These are actual physical servers,
+            So a single client with a multicast address can be connected to more than one.
+        """
+        with self.lock:
+            return {i:RemoteServerInterface(i) for i in self.known_servers}
+
+    def getServer(self):
+        """Returns a single server interface object representing one connected physical remote server
+            Or None if no servers are connected.
+        """
+        with self.lock:
+            for i in self.known_servers:
+                return RemoteServerInterface(self.known_servers[i])
+        return None
 
     def onOldMessage(self,addr, counter, opcode, data):
         """Handles messages with old counter values, which could still 
@@ -648,7 +733,7 @@ class _Client():
             #We do this because if the ack gets lost they shouldn't just resend till it times out.
             if opcode == 1:
                 #No counter race conditions allowed
-                with clientobj.lock:
+                with self.lock:
                     #Do an acknowledgement. Send it unicast back where it came
                     self.counter += 1
                     self.send(self.counter,2,struct.pack("<Q",counter),addr)
@@ -692,7 +777,12 @@ class _Client():
                         self._seenSubscriber(server,self.waitingForAck[d].target)
                     
                     self.waitingForAck[d].onResponse(b'', server.skey)
-            
+                #We accept status data even if we're not looking for that particular ACK,
+                #but ONLY if the counter is new.
+                #If the message is old, we don't want old status data
+                if len(data)>=8+3:
+                    server._status = ServerStatus(struct.unpack("<BBb",data[8:8+3]))
+        
             #RPC Specific stuff
             elif opcode==5:
                 try:
@@ -786,10 +876,16 @@ class _Client():
         with self.lock:
             self.counter+=1
             counter = self.counter
-        #If an address was specified, it doesn't count as a keepalive
-        #Because it might be aimed at only one of many servers on multicast
-        if addr==None:
-            self._keepalive_time=time.time()
+
+        #Right now, I'm doing a full reliable message to every client for the keepalive,
+        #So we get the response and know they're still there.
+        #There's ways to optimize this, but at the same time it also is a convenient
+        #Way to get status updates without another packet type or more work on the server
+        if reliable:
+            #If an address was specified, it doesn't count as a keepalive
+            #Because it might be aimed at only one of many servers on multicast
+            if addr==None:
+                self._keepalive_time=time.time()
 
         if reliable:
             with self.subslock:
@@ -891,7 +987,6 @@ class _Client():
                 return x
             except NoResponseError:
                 delay*=2
-                pass
         raise NoResponseError("Server did not respond after "+str(timeout)+"s")
 
 
@@ -1054,7 +1149,10 @@ class Client():
     def pinMode(self,pin,mode):
         return self.call(20,struct.pack("<BB",pin,mode))
 
-
+    def getServers(self):
+        return self.client.getServers()
+    def getServer(self):
+        return self.client.getServer()
     def call(self,function,data=b'',timeout=None):
         return self.client.call(function, data,timeout=timeout)
 

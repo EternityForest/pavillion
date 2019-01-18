@@ -15,7 +15,7 @@
 #along with Pavillion.  If not, see <http://www.gnu.org/licenses/>.
 
 
-import hashlib,logging,struct,threading,atexit,base64,queue
+import hashlib,logging,struct,threading,atexit,base64,queue,time
 
 DEFAULT_PORT=1783
 DEFAULT_MCAST_ADDR="239.255.28.12"
@@ -29,6 +29,39 @@ allow_new = True
 cleanup_refs = []
 
 import traceback
+
+statusCacheTime = 0;
+statusCache = struct.pack("<BBb",0,255, 0)
+def getStatusBytes():
+    global statusCacheTime, statusCache
+    if time.time()< (statusCacheTime+60):
+        return statusCache
+    statusCacheTime = time.time()
+    bstat = 0
+    nstat = 255
+    temp = 0
+    try:
+        import psutil
+        battery = psutil.sensors_battery()
+        bstat = int((battery.percent/100)*63)
+        if battery.power_plugged:
+            bstat +=128
+        else:
+            bstat+=0
+        temp = 0
+        x = psutil.sensors_temperatures()
+        for i in x:
+            for j in x[i]:
+                if temp< j.current:
+                    temp = j.current
+    except:
+        print(traceback.format_exc())
+    statusCache = struct.pack("<BBb",int(bstat),nstat, max(min(int(temp), 127), -127))
+    return statusCache
+
+
+
+
 class ReturnChannel():
     """Node is supposed to be a secure ID of the node, preferably the session key they send to
     us with"""

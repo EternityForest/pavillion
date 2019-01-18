@@ -41,6 +41,36 @@ extern "C"
 
 #define ip_cmp(a, b) ((a[0] == b[0]) & (a[1] == b[1]) & (a[2] == b[2]) & (a[3] == b[3]))
 
+
+#ifdef ESP32
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint8_t temprature_sens_read();
+#ifdef __cplusplus
+}
+#endif
+
+__attribute__((weak)) int pavillion_getTemperature()
+{
+  return (temprature_sens_read() - 32) / 1.8;
+}
+
+#else
+
+__attribute__((weak)) int pavillion_getTemperature()
+{
+  return 25;
+}
+#endif
+
+__attribute__((weak)) int pavillion_getBatteryStatus()
+{
+  return 0;
+}
+
+
 static bool connected = false;
 
 //Estimate of the AP's TX power
@@ -595,7 +625,18 @@ void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uin
     if (data[0] == PAV_OP_RELIABLE)
     {
       dbg("Sending acknowledgement");
-      sendRawEncrypted(2, (uint8_t *)&counter, 8);
+      uint8_t rbufack = malloc(8+3);
+      int rssi =  WiFi.RSSI();
+      if rssi>-20:
+        rssi= -20
+      rssi+=120;
+
+      writeUnsignedNumber(rbufack,8, counter);
+      writeUnsignedNumber(rbufack+8,1, (pavillion_getBatteryStatus()*64)/100);
+      writeUnsignedNumber(rbufack+9,1, rssi);
+      writeUnsignedNumber(rbufack+8,2, pavillion_getTemperature());
+
+      sendRawEncrypted(2, (uint8_t *)&counter, 8+3);
     }
 
 

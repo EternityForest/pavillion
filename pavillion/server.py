@@ -298,7 +298,7 @@ class _ServerClient():
 
                     #If we used a guest key, report the hash of said guest key
                     if self.guest_key:
-                        self.clientID = common.libnacl.generic_hash(self.guest_key)
+                        self.clientID = common.libnacl.crypto_generichash(self.guest_key, b'')
                     self.ignore = 0
                     self.sendSetup(0, 7, self.sessionID)
                     self.setupCompleted = True
@@ -374,6 +374,9 @@ class _Server():
         #A list of all the registers and functions indexed by number
         self.registers = {}
 
+        #If we should send system info like battery status,
+        #wifi signal, and temperature
+        self.enableStatusReporting = False
 
         self.ecc_keypair = ecc_keypair
         self.running = True
@@ -511,7 +514,11 @@ class _Server():
             with self.lock:
                 #Do an acknowledgement
                 self.knownclients[addr].counter += 1
-                self.knownclients[addr].send(self.knownclients[addr].counter,2,struct.pack("<Q",counter))
+                if self.enableStatusReporting:
+                    sb = common.getStatusBytes()
+                else:
+                    sb = b''
+                self.knownclients[addr].send(self.knownclients[addr].counter,2,struct.pack("<Q",counter)+sb)
 
 
     def onMessage(self,client, counter, opcode, data,clientID=None):
@@ -538,7 +545,11 @@ class _Server():
             with self.lock:
                 #Do an acknowledgement
                 self.knownclients[addr].counter += 1
-                self.knownclients[addr].send(self.knownclients[addr].counter,2,struct.pack("<Q",counter))
+                if self.enableStatusReporting:
+                    sb = common.getStatusBytes()
+                else:
+                    sb = b''
+                self.knownclients[addr].send(self.knownclients[addr].counter,2,struct.pack("<Q",counter)+sb)
 
             #Repeat messages to all the other clients if broker mode is enabled.
             if self.broker:
@@ -709,6 +720,9 @@ class Server():
         self.registers = self.server.registers
         self.ignore = self.server.ignore
 
+    def setStatusReporting(self,s):
+        "Enable or disable sending battery, temperature, and RSSI data to clients"
+        self.server.enableStatusReporting = s
     def sendMessage(self, target, name, data, reliable=True, timeout = 10,addr=None):
         return self.server.sendMessage(target, name, data, reliable, timeout,addr)
     

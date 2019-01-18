@@ -187,6 +187,9 @@ if __name__ == '__main__':
 
                 #Servers identify clients by client id and key pairs.
                 s = Server(keys={cid2:psk})
+
+                s.setStatusReporting(True)
+
                 c = Client(psk=psk, clientID=cid2)
 
                 time.sleep(0.5)
@@ -200,6 +203,7 @@ if __name__ == '__main__':
                 m = s.messageTarget('TestTarget',z)
 
                 c.sendMessage("TestTarget","MessageName",b'data')
+
                 
                 start = time.time()
                 while(not incoming):
@@ -218,8 +222,15 @@ if __name__ == '__main__':
                 gc.collect()
                 c.sendMessage("TestTarget","MessageName",b'data')
 
+               
+                time.sleep(0.2)
                 #Assert that the server can be cleaned up by the usual weakref methods
                 self.assertEqual(len(incoming),0)
+                
+                print(c.getServer().battery(),"bat")
+                print(c.getServer().batteryState(),"bat")
+                print(c.getServer().temperature(),"temp")
+
 
             finally:
                 c.close()
@@ -391,7 +402,10 @@ if __name__ == '__main__':
                     time.sleep(0.1)
                     if start<time.time()-5:
                         raise RuntimeError("Timed Out")
-
+                while(not incoming2):
+                    time.sleep(0.1)
+                    if start<time.time()-5:
+                        raise RuntimeError("Timed Out")
                 self.assertEqual(incoming[0],("MessageName",b'data',c.clientID))
                 self.assertEqual(incoming[0],("MessageName",b'data',c.clientID))
 

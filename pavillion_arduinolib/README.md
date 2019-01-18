@@ -136,6 +136,23 @@ uint64_t readUnsignedNumber(void * i,int len);
 void writeSignedNumber(void * i,int len, int64_t val);
 void writeUnsignedNumber(void * i,int len, uint64_t val);
 
+### Transmitting server status data
+The Arduino version of pavillion attaches the server's WiFi signal level to certain packets.
+However, the ESP8266 has no builtin concept of battery or temperature.
+
+To use these, you can define `int pavillion_getTemperature()`(Builtin on ESP32),
+and `int pavillion_getBatteryStatus()`. The temperature function must return an int in celcius between -127 and 127.
+
+The battery status function must return a number between 0 and 63 indicating the relative fullness,
+plus one of the following status flags:
+
+
+```
+  #define PAV_BATSTATUS_CHARGING 2* 64
+  #define PAV_BATSTATUS_SLOWCHARGING 1* 64
+  #define PAV_BATSTATUS_DISCHARGING 0* 64
+  #define PAV_BATSTATUS_GENERATING 3* 64
+```
 
 ### Dynamic TX power
 Pavillion tries to use the minimum amount of power to achieve full speed. To 
