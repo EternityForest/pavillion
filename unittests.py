@@ -230,6 +230,7 @@ if __name__ == '__main__':
                 print(c.getServer().battery(),"bat")
                 print(c.getServer().batteryState(),"bat")
                 print(c.getServer().temperature(),"temp")
+                print(c.getServer().rssi(),"rssi")
 
 
             finally:

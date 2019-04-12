@@ -186,8 +186,8 @@ static void pav_WiFiEvent(WiFiEvent_t event)
 
 //ESP8266
 #else
-WiFiEventHandler stationConnectedHandler;
-WiFiEventHandler stationDisconnectedHandler;
+static WiFiEventHandler stationConnectedHandler;
+static WiFiEventHandler stationDisconnectedHandler;
 
 static void pav_onconnect(const WiFiEventStationModeConnected &evt)
 {
@@ -215,9 +215,6 @@ static SemaphoreHandle_t setThingsUp()
   SemaphoreHandle_t t;
 #ifdef ESP32
   WiFi.onEvent(pav_WiFiEvent);
-#else
-  stationConnectedHandler = WiFi.onSoftAPModeStationConnected(&pav_onconnect);
-  stationDisconnectedHandler = WiFi.onSoftAPModeStationDisconnected(&pav_ondisconnect);
 #endif
   t = xSemaphoreCreateBinary();
   xSemaphoreGive(t);
@@ -460,6 +457,8 @@ void PavillionServer::broadcastMessage(const char *target, const char *name, uin
       }
       else
       {
+        //TODO: Eliminate this delay in favor of 10ms polling
+        //So we don't get those big interruptions
         delay(d);
       }
       PAV_LOCK();
@@ -625,18 +624,33 @@ void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uin
     if (data[0] == PAV_OP_RELIABLE)
     {
       dbg("Sending acknowledgement");
-      uint8_t rbufack = malloc(8+3);
-      int rssi =  WiFi.RSSI();
-      if rssi>-20:
-        rssi= -20
-      rssi+=120;
+      uint8_t *rbufack = (uint8_t*)malloc(8+3);
+      if(rbufack)
+      {
+        int rssi =  WiFi.RSSI();
+        if (rssi>-20)
+        {
+          rssi= -20;
+        }
+        rssi+=120;
+        if(rssi>100)
+        {
+          rssi=100;
+        }
+        if(rssi<0)
+        {
+          rssi=0;
+        }
 
-      writeUnsignedNumber(rbufack,8, counter);
-      writeUnsignedNumber(rbufack+8,1, (pavillion_getBatteryStatus()*64)/100);
-      writeUnsignedNumber(rbufack+9,1, rssi);
-      writeUnsignedNumber(rbufack+8,2, pavillion_getTemperature());
+        //Put in the additional status data
+        writeUnsignedNumber(rbufack,8, counter);
+        writeUnsignedNumber(rbufack+8,1, (pavillion_getBatteryStatus()*64)/100);
+        writeUnsignedNumber(rbufack+9,1, rssi);
+        writeUnsignedNumber(rbufack+10,1, pavillion_getTemperature());
 
-      sendRawEncrypted(2, (uint8_t *)&counter, 8+3);
+        sendRawEncrypted(2, rbufack, 8+3);
+        free(rbufack);
+      }
     }
 
 

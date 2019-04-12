@@ -46,7 +46,13 @@ import queue
 
 
 class ServerStatus():
-    def __init__(self,data):
+    def __init__(self,data=None):
+        if not data==None:
+            data = struct.unpack("<BBb",data)
+            self.raw = data
+        else:
+            data = (0,255,255)
+            self.raw = None
         batt, net, temp = data
         blevel = batt%64
         bstate = (batt-blevel)/64
@@ -68,12 +74,25 @@ class ServerStatus():
             self.battery=100
         self.temp = temp
 
+        self.rssi= -70
+        self.netType = "unknown"
+
+        if net<101:
+            self.netType = "wlan"
+            self.rssi = net-120
+        elif net<201:
+            self.netType = "wwan"
+            self.rssi-(101+150)
+        elif net == 202:
+            self.netType = "wired"
+
 class NotConnected(Exception):
     pass
 
 class RemoteServerInterface():
     def __init__(self,s):
         self._s = weakref.ref(s)
+        self.addr = s.addr
     def _getServer(self):
         s = self._s()
         if not s:
@@ -91,8 +110,17 @@ class RemoteServerInterface():
         return self._getServer().status().batteryState
     
     def temperature(self):
-        "Returns bettery in percent, or raises NotConnected"
+        "Returns temperature in C, or raises NotConnected"
         return self._getServer().status().temp
+
+    def rssi(self):
+        "Returns temperature in C, or raises NotConnected"
+        return self._getServer().status().rssi
+
+    def netType(self):
+        "Returns temperature in C, or raises NotConnected"
+        return self._getServer().status().netType
+
 
 class _RemoteServer():
     """This class is used to keep track of the remote servers.
@@ -141,8 +169,9 @@ class _RemoteServer():
 
         self.addr = addr
         #Raw status string data 
-        self._status = ServerStatus((0,255,0))
-
+        self._status = ServerStatus()
+        self.iface = RemoteServerInterface(self)
+        
     def status(self):
         return self._status
 
@@ -231,7 +260,6 @@ class _RemoteServer():
                 #We don't know how to process this message. So we send
                 #a nonce request to the server
                 else:
-                    pavillion_logger.debug("Recieved packet from unknown server, attempting setup")
                     dbg("Unknown server sent packet", addr)
                     self.sendNonceRequest(addr)
 
@@ -269,7 +297,6 @@ class _RemoteServer():
                             servernonce,challenge,h = struct.unpack("<32s16s32s",data)
                             if not challenge==clientobj.challenge:
                                 dbg("client recieved bad challenge response", challenge, clientobj.challenge, data)
-                                logging.debug("Client recieved bad challenge response")
                                 return
                             dbg("Valid response")
                             #Ensure the nonce we get is real, or else someone could DoS us with bad nonces.
@@ -315,7 +342,6 @@ class _RemoteServer():
                                 dbg(servernonce+challenge,clientobj.psk)
                                 dbg("client recieved bad challenge response hash",  clientobj.cipher.keyedhash(servernonce+challenge,clientobj.psk), h,data)
 
-                                logging.debug("Client recieved bad challenge response")
                             
                 if opcode == 11:
                     if  clientobj.keypair:
@@ -693,7 +719,7 @@ class _Client():
             except:
                 print(traceback.format_exc())
 
-            while(time.time()-s> 30):
+            while((time.time()-s) < 30):
                 if not self.running:
                     return
                 time.sleep(1)
@@ -703,7 +729,7 @@ class _Client():
             So a single client with a multicast address can be connected to more than one.
         """
         with self.lock:
-            return {i:RemoteServerInterface(i) for i in self.known_servers}
+            return {i:RemoteServerInterface(self.known_servers[i]) for i in self.known_servers if self.known_servers[i].connectedAt>(time.time()-240)}
 
     def getServer(self):
         """Returns a single server interface object representing one connected physical remote server
@@ -711,7 +737,8 @@ class _Client():
         """
         with self.lock:
             for i in self.known_servers:
-                return RemoteServerInterface(self.known_servers[i])
+                if self.known_servers[i].connectedAt>(time.time()-240):
+                    return RemoteServerInterface(self.known_servers[i])
         return None
 
     def onOldMessage(self,addr, counter, opcode, data):
@@ -781,7 +808,9 @@ class _Client():
                 #but ONLY if the counter is new.
                 #If the message is old, we don't want old status data
                 if len(data)>=8+3:
-                    server._status = ServerStatus(struct.unpack("<BBb",data[8:8+3]))
+                    server._status = ServerStatus(data[8:8+3])
+                    if not server._status.raw == data[8:8+3]:
+                        self.handle().onServerStatusUpdate(server.iface)
         
             #RPC Specific stuff
             elif opcode==5:
@@ -1176,3 +1205,6 @@ class Client():
         """
             Meant for subclassing. Used for detecting when a server is no longer listening to a message target
         """
+    
+    def onServerStatusUpdate(self, server):
+        """Called with a RemoteServerInterface when there's new status data"""

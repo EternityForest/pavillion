@@ -259,7 +259,10 @@ compatibility is needed.
 
 
 ## Reserved RPC Calls
-The first 4096 calls are reserved so that a set of standard calls can be defined. The currently defined ones are as follows:
+The first 4096 calls are reserved so that a set of standard calls can be defined. In this notation, the params in the parens are
+directly concatenated together. (u8 foo, u8 bar) indicates 2 bytes, foo and bar.
+
+ The currently defined ones are as follows:
 
 ### 0: Echo
 
@@ -355,22 +358,32 @@ Takes 2 bytes, the first being a pin number and the second being a "mode", where
 
 0 corresponds to INPUT, 139 corresponds to OUTPUT, and 3 corresponds to INPUT_PULLUP on arduino.
 
-### 21: digitalRead(pin)
+### 21: digitalRead(u8 pin)
 Must return 1 byte, with a 1 or zero depending on the pin state.
 
-### 22: pwmWrite(pin, state)
+### 22: pwmWrite(u8 pin, u8 state)
 call with 255 to set a pin high, 0 to set low, and anything else to trigger PWM mode.
 
-### 23: analogRead(pin)
-Returns a 4 byte signed number that is the digital value.
+### 23: analogRead(u8 pin)
+Returns a 4 byte signed number that is the raw digital value from the ADC.
 
-### 24: getConfig(key)
+### 24: getConfig(nstr key)
 Return the string "config option" for the null-terminated string key.
 
-### 25: setConfig(key, value)
+### 25: setConfig(nstr key, nstr value)
 All parameters are null terminated strings. Returns 0 bytes, and sets the config option given.
 
 
+### 26: wireTransaction(u16 addr, u8 flags, u8 toRead, u8[N] toWrite)
+Param string is the addr(16 bits to support 10 bit addresses), the flags(reserved),the number of bytes to read,
+and the rest of the string is the bytes to write.
+
+The device will write all of the bytes(Unless there are 0 of them), then read the requested number of bytes(if any) and return them
+
+#### Error Codes:
+* 5: Address Nack
+* 6: Data Write Nack
+* 7: Data Read Nack
 
 ## Config
 
@@ -402,3 +415,8 @@ and every value must be a POSIX timezone string.
 
 ### 4: File does not exist
 
+### 5: I2C Addr Nack
+
+### 6: I2C Data Write Nack
+
+### 7: I2c Data Read Nack
