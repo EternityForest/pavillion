@@ -161,3 +161,8 @@ because most APs run at full power. set `pavillionApTxPower` to 0 to disable it,
 value in dbm to make optimization more accurate.
 
 This only happens on the ESP8266 at the moment.
+
+### Letting Pavillion manage WiFi reconnection
+
+`void pavillionConnectWiFi(static unsigned char * ssid, static unsigned char * psk);`
+This also handles turning off that silly persistance feature that wears out flash.

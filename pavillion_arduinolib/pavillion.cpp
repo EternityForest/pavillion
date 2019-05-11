@@ -43,7 +43,7 @@ extern "C"
 
 
 #ifdef ESP32
-
+# include
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -153,6 +153,12 @@ void writeUnsignedNumber(void *i, int len, uint64_t val)
     ((uint8_t *)i)[j] = ((uint8_t *)&val)[j];
   }
 }
+static unsigned long reconnectTimer = 0;
+
+//Cinfigured ssid and psk if pavillion is doing reconnect
+static char * cssid=0;
+static char * cpsk=0;
+
 
 #ifdef ESP32
 //TODO: thread safe if we ever implement closing a server
@@ -165,6 +171,7 @@ static void pav_WiFiEvent(WiFiEvent_t event)
   {
   case SYSTEM_EVENT_STA_GOT_IP:
     dbg(F("WiFi connected"));
+    reconnectTimer=0;
 
     //TODO: We should try to send a message to the last known server we were in contact with?
     connected = true;
@@ -177,6 +184,13 @@ static void pav_WiFiEvent(WiFiEvent_t event)
   case SYSTEM_EVENT_STA_DISCONNECTED:
     dbg(F("WiFi disconnected"));
     connected = false;
+    reconnectTimer=millis();
+
+    //If we configured auto reconnect
+    if(cssid)
+    {
+      WiFi.begin(cssid,cpsk);
+    }
     break;
 
   default:
@@ -193,6 +207,7 @@ static void pav_onconnect(const WiFiEventStationModeConnected &evt)
 {
   dbg(F("WiFi Connected"));
   connected = true;
+  reconnectTimer=0;
   PavillionServer *p = ServersList;
   while (p)
   {
@@ -205,6 +220,13 @@ static void pav_ondisconnect(const WiFiEventStationModeDisconnected &evt)
 {
   dbg(F("WiFi disconnected"));
   connected = false;
+  reconnectTimer=millis();
+
+  //If we configured auto reconnect
+    if(cssid)
+    {
+      WiFi.begin(cssid,cpsk);
+    }
 }
 #endif
 
@@ -644,7 +666,7 @@ void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uin
 
         //Put in the additional status data
         writeUnsignedNumber(rbufack,8, counter);
-        writeUnsignedNumber(rbufack+8,1, (pavillion_getBatteryStatus()*64)/100);
+        writeUnsignedNumber(rbufack+8,1, pavillion_getBatteryStatus());
         writeUnsignedNumber(rbufack+9,1, rssi);
         writeUnsignedNumber(rbufack+10,1, pavillion_getTemperature());
 
@@ -959,6 +981,17 @@ void PavillionServer::listen()
 void PavillionServer::poll()
 {
   PAV_LOCK();
+ 
+   if (reconnectTimer)
+  {
+    if (millis()-reconnectTimer> 20000)
+    {
+      WiFi.persistent(false);
+      reconnectTimer = millis()|1;
+      WiFi.begin(cssid, cpsk);
+    }
+  }
+
   if (connected == false)
   {
     PAV_UNLOCK();
@@ -979,3 +1012,28 @@ optimizeTXPower();
   }
   PAV_UNLOCK();
 }
+
+
+void pavillionConnectWiFi(const char * ssid, const char * psk)
+{
+  PAV_LOCK();
+
+  if(cssid)
+  {
+    free(cssid);
+  }
+  cssid=(char *)malloc(strlen(ssid)+2);
+  strcpy(cssid,ssid);
+
+  if(cpsk)
+  {
+    free(cpsk);
+  }
+  cpsk=(char *)malloc(strlen(psk)+2);
+  strcpy(cpsk,psk);
+  
+  WiFi.persistent(false);
+  WiFi.begin(ssid,psk);
+  PAV_UNLOCK();
+}
+

@@ -3,12 +3,12 @@
 from pavillion import *
 import time
 
+clientlib.debug_mode = True
 
-
-psk = b'PSK1'*8
+psk = b'\0'*32
 cid2 = b'cid2'*4
 
-c = Client(psk=b"ZbCG43nkb6kuUwynqSsIgLZmn0SGd1Sp", clientID=cid2, address=("255.255.255.255",12345))
+c = Client(psk=b"\0"*32, clientID=cid2, address=("255.255.255.255",1783))
 time.sleep(1)
 #print(c.call(0,b"foo"))
 print(time.time())

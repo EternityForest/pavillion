@@ -32,6 +32,9 @@ def dbg(*a):
         print (a)
 
 def is_multicast(addr):
+    #TODO: Do multicast URLs exist?
+    if isinstance(addr,str):
+        return False
     if not ":" in addr:
         a = addr.split(".")
         if 224<= int(a[0]) <= 239:
@@ -106,7 +109,7 @@ class RemoteServerInterface():
         return self._getServer().status().battery
     
     def batteryState(self):
-        "Returns bettery in percent, or raises NotConnected"
+        "Returns battery state as one of charging, discharging, generating, slowcharging, unknown"
         return self._getServer().status().batteryState
     
     def temperature(self):
@@ -114,12 +117,17 @@ class RemoteServerInterface():
         return self._getServer().status().temp
 
     def rssi(self):
-        "Returns temperature in C, or raises NotConnected"
+        "Returns RSSI in dbm"
         return self._getServer().status().rssi
 
     def netType(self):
         "Returns temperature in C, or raises NotConnected"
         return self._getServer().status().netType
+
+    def address(self):
+        #Returns the current addr of the server
+        return self._getServer().addr
+    
 
 
 class _RemoteServer():
@@ -576,17 +584,20 @@ class _Client():
     def send(self, counter, opcode, data,addr=None):
         
         ##Experimental optimization to send to the only known server most of the time if there's only one
-        #We want to send a real broadcast if we haven't done one in 3s, this is really just
+        #We want to send a real broadcast if we haven't done one in 30s, this is really just
         #An optimization for if we ever send frequent bursts of data
         
         #Don't override the address setting though, if manually given
 
         #TODO: decide if this is actually a good idea, and for what opcodes.
+        #I'm making this 30s because we already have other ways of discovery.
         try:
             if addr==None and len(self.known_servers)==1:
-                if self.lastActualBroadcast> time.time()-3:
+                if self.lastActualBroadcast> time.time()-30:
                     for i in self.known_servers:
-                        addr = i
+                        #Only do the optimization if we're actually connected
+                        if self.known_servers[i].connectedAt>(time.time()-30):
+                            addr = i
                 else:
                     self.lastActualBroadcast = time.time()
         except:
@@ -752,7 +763,7 @@ class _Client():
         #So we don't need to use the usual validation.
 
         #Some stuff is common to messages and RPC calls
-        if opcode==2 or opcode==5:
+        if opcode==1 or opcode==5:
             #Get the message number it's an ack for
             d = struct.unpack("<Q",data[:8])[0]
             #acknowlegement happens even for old messages, so long as they aren't too old.
@@ -808,10 +819,16 @@ class _Client():
                 #but ONLY if the counter is new.
                 #If the message is old, we don't want old status data
                 if len(data)>=8+3:
-                    server._status = ServerStatus(data[8:8+3])
                     if not server._status.raw == data[8:8+3]:
-                        self.handle().onServerStatusUpdate(server.iface)
+                        nd = True
+                    else:
+                        nd=False                   
         
+                    server._status = ServerStatus(data[8:8+3])
+                    if nd:
+                        self.handle().onServerStatusUpdate(server.iface)
+
+
             #RPC Specific stuff
             elif opcode==5:
                 try:
@@ -824,7 +841,7 @@ class _Client():
                     pass
 
         #Handle S->C messages
-        if  opcode==3:
+        if  opcode==3 or opcode==1:
             d = data.split(b'\n',2)
             #If we have a listener for that message target
             if d[0].decode('utf-8') in self.messageTargets:
@@ -838,7 +855,19 @@ class _Client():
                         def f():
                             i.callback(d[1].decode('utf-8') ,d[2],addr)
                         self.handle().execute(f)
-
+            #If we have a listener for the "All messages"    
+            if None in self.messageTargets:
+                s = self.messageTargets[None]
+                with self.targetslock:
+                    #Look for weakrefs that haven't expired
+                    for i in s:
+                        i = i()
+                        if not i:
+                            continue
+                        def f():
+                            #This is different, we also pass the target.
+                            i.callback(d[0].decode('utf-8'),d[1].decode('utf-8') ,d[2],addr)
+                        self.handle().execute(f)
         #Handle S->C messages.
         if  opcode==1:
             d = data.split(b'\n',2)
@@ -1093,6 +1122,15 @@ class Client():
 
     def messageTarget(self,target,callback):
         return self.client.messageTarget(target, callback)
+
+    @property
+    def remoteAddress(self):
+        """Returns the address of the remote device, or None if disconnected.
+           If the client is in multicast mode, return one if them
+        """
+        for i in self.client.known_servers:
+            if self.client.known_servers[i].connectedAt>(time.time()-60):
+                return i
     @property
     def address(self):
         return self.client.sock.getsockname()

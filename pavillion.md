@@ -68,7 +68,7 @@ counter.
 An uncounted message is one that does not rely on the packet counter to prevent replay attacks.
 
 #### 1: Reliable Message
-Represents an MQTT or XMPP message with a name sent to a target(Akin to a topic). Message topics beginning with "core." are reserved.
+Represents an MQTT or XMPP message with a name sent to a target(Akin to a topic). Message topics beginning with "core." are reserved(see [coremessages.md]).
 
 Data area format:
 
@@ -82,6 +82,13 @@ Data is the message counter for that packet, optionally followed by a server sta
 Bits 0-5: Battery level from 0 to 63, where 0 indicates the device does not support battery status.
 Bits 6,7: 00: discharging, 01: slowCharging(Connected but discharging), 10: charging, 11: generating(More than using)
 
+The following defines may be used to make this easier.  
+  ```
+  #define PAV_BATSTATUS_CHARGING 2* 64
+  #define PAV_BATSTATUS_SLOWCHARGING 1* 64
+  #define PAV_BATSTATUS_DISCHARGING 0* 64
+  #define PAV_BATSTATUS_GENERATING 3* 64
+  ```
 ##### uint8 NetworkStatus
 Value 0-100: RSSI+120, connected to WLAN
 Value 101-200: RSSI+(101+150), connected to WWAN
@@ -89,7 +96,8 @@ Value 201: Wired
 Value 255: Unknown
 
 #### int8 Temperature
-Celcius temperature of the device itself.
+Celcius temperature of the device itself. It should be from the "Most relevant" amd likely to overheat
+part of the system if possible.
 
 
 #### 3: Unreliable Message
@@ -244,6 +252,7 @@ No long term drift will result as real world timestamps aren't used to calculate
 The exception is manual or non-timer transitions. In these cases the actual and conceptual times should match the real event timestamp.
 
 
+
 ## Pavillion General Events Target
 
 The General Events Target is a Pavillion target on port XX with the target name YYY. It is reserved for small and very infrequent events about certain defined events.
@@ -259,8 +268,9 @@ compatibility is needed.
 
 
 ## Reserved RPC Calls
-The first 4096 calls are reserved so that a set of standard calls can be defined. In this notation, the params in the parens are
-directly concatenated together. (u8 foo, u8 bar) indicates 2 bytes, foo and bar.
+The first 4096 calls are reserved so that a set of standard calls can be defined. In this notation, the params in the parens are directly concatenated together. (u8 foo, u8 bar) indicates 2 bytes, foo and bar.
+
+All of these are optional to implement.
 
  The currently defined ones are as follows:
 
