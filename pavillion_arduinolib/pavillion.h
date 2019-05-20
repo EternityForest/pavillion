@@ -67,7 +67,6 @@ extern int pavillion_getBatteryStatus();
 //Indicates the tag is a writable output
 #define TAG_FLAG_WRITABLE 1
 
-
 #ifdef PAVILLIONDEBUG
 #define dbg(x) Serial.println(x)
 #define dbgn(x) Serial.println((long)x)
@@ -167,7 +166,7 @@ class PavillionTagpoint
         float value;
         float max=10000000000.0;
         float min=-10000000000.0;
-        float interval =0;
+        float interval =0.0;
         void set(float n);
         void push();
         PavillionTagpoint(const char *name,PavillionServer * p);

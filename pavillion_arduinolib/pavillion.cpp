@@ -339,7 +339,8 @@ void PavillionServer::broadcastMessage(const char *target, const char *name, con
 }
 
 
-static void setTagValueByName(char * name, float v);
+static void setTagValueByName(char * name, float v,uint64_t timestamp);
+
 void PavillionServer::broadcastMessage(const char *target, const char *name, const uint8_t *data, int len, char opcode)
 {
   dbg("Starting to broadcastMessage");
@@ -484,8 +485,16 @@ void PavillionServer::broadcastMessage(const char *target, const char *name, con
                                   len + tlen + nlen + 2 + 1, (uint8_t *)&(knownClients[i]->counter[0]),
                                   knownClients[i]->skey);
 
+            //After a few retries we crank up the power
+            if(d>200)
+            {
+              WiFi.setOutputPower(20);
+            }
             sendUDP(op, len + tlen + nlen + 2 + 16 + 8 + 1 + 11, knownClients[i]->addr, knownClients[i]->port);
             free(op);
+
+            //Turn it back to the optimized baseline when we're done
+            optimizeTXPower();
           }
         }
       }
@@ -528,6 +537,7 @@ void PavillionServer::broadcastMessage(const char *target, const char *name, con
             if (knownClients[i]->ack_responded == false)
             {
               dbg("Still waiting on client");
+  
               canQuit = 0;
             }
             else
@@ -608,8 +618,10 @@ void PavillionServer::onApplicationMessage(IPAddress addr, uint16_t port, uint64
       //If it's a tag point message that's kind of important.
       if(strcmp(topic,"core.tagv")==0)
       {
-        //bytes 0-4 are the floating point value.
-        setTagValueByName(name, ((float*) payload)[0]);
+        //bytes 0-3 are the floating point value. 4-7 are the timestamp
+        //We save the timestamp from the client, because it represents the real time at which
+        //The measurememt or command happened.
+        setTagValueByName(name, ((float*) payload)[0], ((uint64_t*)payload+4)[0]);
       }
     }
   }
@@ -814,8 +826,12 @@ void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uin
                          clientPSK, 32);
 
       head += 32;
-
+      
+      //Increase power for setup messages
+      WiFi.setOutputPower(20);
       this->server->sendUDP(resp, head - resp, this->addr, this->port);
+      optimizeTXPower();
+
       free(resp);
     }
 
@@ -883,15 +899,32 @@ void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uin
       //send the client the connection timestamp
       uint64_t ts = pavillionMonotonicTime();
 
+      WiFi.setOutputPower(20);
+      
       this->sendRawEncrypted(16, (uint8_t *)(&ts), 8);
+      if (tagsList)
+      {
+        //If tag points are in use, this gets to be more important
+        //So we send it twice to increase the chances we have a good time sync
+        //before the first tag data arrives at the client.
+        uint64_t ts = pavillionMonotonicTime();
+        this->sendRawEncrypted(16, (uint8_t *)(&ts), 8);
+        //This should mostly ensure the message gets there before the tag data.
+        //It's not exactly a big deal if it isn't, the client should be
+        //able to resolve the conflict no matter what, just not
+        //In the way we'd like
+        delay(20);
+      }
       //No reusing the server nonce is allowed here.
       randombytes_buf(serverNonce, 32);
       //Every reconnect, we send the state of all alerts
       //Because they might have changed while we weren't looking.
       pushAllAlerts(this->server);
       pushAllTags(this->server);
-
+      
+      optimizeTXPower();
     }
+
   }
 }
 
@@ -1063,12 +1096,13 @@ void PavillionServer::poll()
     }
   }
 
+  uint32_t m =micros();
   //Hack so we can get a 64 bit count
-  if(lastMicrosCheckTime> micros())
+  if(lastMicrosCheckTime> m)
   {
     microsRollovers+=1;
   }
-  microsRollovers=micros();
+  lastMicrosCheckTime=m;
 
 
   if (connected == false)
@@ -1187,6 +1221,9 @@ PavillionTagpoint::PavillionTagpoint(const char * n, PavillionServer * s)
 {
   PAV_LOCK();
   server = s;
+  interval=0;
+  min=-1000000000;
+  max=1000000000;
   name=(char *)malloc(strlen(n)+1);
   strcpy(name, n);
 
@@ -1232,14 +1269,14 @@ void PavillionTagpoint::clearFlag(uint8_t f)
 //Push the value and configuration of the tagpoint to the server
 void PavillionTagpoint::push()
 {
-  uint8_t d[12+1+8];
+  uint8_t d[16+1+8];
   ((float *)d)[0]=value;
   ((float *)d)[1]=min;
   ((float *)d)[2]=max;
   ((float *)d)[3]=interval;
-  d[12]=flags;
+  d[16]=flags;
 
-  ((uint64_t*)(d+13))[0]=timestamp;
+  ((uint64_t*)(d+17))[0]=timestamp;
 
 
   server->broadcastMessage("core.tag",name,d,16+1+8);
@@ -1261,7 +1298,7 @@ static void pushAllTags(PavillionServer * s)
   PAV_UNLOCK();
 }
 
-static void setTagValueByName(char * name, float v)
+static void setTagValueByName(char * name, float v,uint64_t timestamp)
 {
   PAV_LOCK();
    PavillionTagpoint *p = tagsList;
@@ -1272,7 +1309,7 @@ static void setTagValueByName(char * name, float v)
       {
         if(p->flags & TAG_FLAG_WRITABLE)
         {
-            p->timestamp = pavillionMonotonicTime();
+            p->timestamp =timestamp;
             p->value=v;
         }
         break;

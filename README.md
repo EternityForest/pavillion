@@ -89,6 +89,40 @@ Returns a messageTarget obj you must keep a ref to, along with the function itse
 Calls RPC function number N with the given binary arg string. Normally returns the return data
 As arg string, but may raise pavillion.Client.RemoteError or others if the server sends back an error code.
 
+### x = c.getServer()
+If there is only one connected server, returns a "server interface". If therew is more than one, it chooses randomly. If there is no connected server, returns None.
+
+
+## Server Interface
+These are used by code on the client to represent one individual server(Remember, we support multicast,
+there could be more than one.)
+
+### si.remoteMonotonic()
+
+Gets the current value of the remote devices monotonic clock(Think millis()) on arduino. It does not
+roll over as 64 bit microseconds are used internally. However it may appear to go backwards if the server reboots.
+
+This function may fail if the time is not synced yet, or if the server is disconnected.
+
+### si.toRemoteMonotonic(t)
+Convert time as returned by time.monotonic() to the monotonic scale of the server.
+
+
+### si.toRemoteMonotonic(t)
+Convert time on remote server to the monotonic scale of the local time.monotonic().
+
+
+### si.rssi()
+
+Returns what the remote server reports as it's RSSI in dbm if on WiFi
+
+### si.battery()
+
+Returns what the remote server reports as it's battery level in percent, if it reports that.
+
+### si.temperature()
+Returns what the remote server reports as it's temperature in C, if it reports that.
+
 
 
 ## Server Objects
