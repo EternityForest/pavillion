@@ -174,34 +174,28 @@ Same as above, but for unsubscribing.
 #### Opcode 15
 
 #### Opcode 16(Client Accept)
-The actual message content is reserved and so should be empty. This message indicates to the client that the secure connection
-was correctly established and may provide more info in the future.
+This message indicates to the client that the secure connection was correctly established. The data should contain the a 64 bit microseconds timestamp according to the server's monotonic clock.
 
 #### Opcode 18 Binary Data Update
-This is a series of "records" in a format TBD, prefixed by a three byte device status.
-
-One record consists of a Record Class byte, the lower four bits of which indicate the data len,
-and the uppr four bits of which indicate the class.
-
-This is followed by a record type byte, and N bytes of data.
-
-All record types are currently reserved.
+This is a series of "records" in a format TBD, prefixed by a three byte device status identical to that for
+Message Acknowledge.
 
 
-The three byte device status is as follows:
+#### Opcode 20 Time Sync Request
 
-##### uint8 BatteryStatus
-Bits 0-5: Battery level from 0 to 63, where 0 indicates the device does not support battery status.
-Bits 6,7: 00: discharging, 01: slowCharging(Connected but discharging), 10: charging, 11: generating(More than using)
+This message simply causes the reciever to reply with a time sync response, if the reciever supports it.
 
-##### uint8 NetworkStatus
-Value 0-100: RSSI+120, connected to WLAN
-Value 101-200: RSSI+(101+150), connected to WWAN
-Value 201: Wired
-Value 255: Unknown
+#### Opcode 21 Time Sync Response
 
-#### int8 Temperature
-Celcius temperature of the device itself.
+This message has the following structure:
+
+uint64 counter: Counter value of the request
+
+uint64 local monotonic time: Sending device's monotonic clock, or 0 if not supported, in microseconds
+
+Optional uint64 local absolute clock: Sending device's absolute clock in UTC microseconds since the unix epoch, or 0 if not supported
+
+Optional uint64 sending devices TAI clock in microseconds since the unix epoch
 
 
 
@@ -287,7 +281,7 @@ Read from
 ### 3: Write
 The argument string should be input to the server's "Standard input", whatever that means for this particular server.
 
-### 5: PavTime
+### 5: PavTime(Mostly deprecated, use opcode 20 and 21)
 This function must accept a 64 bit number followed by a 32 byte one, the tx time and tx time nanoseconds, and return a PTime packet:
 
 Tx u64

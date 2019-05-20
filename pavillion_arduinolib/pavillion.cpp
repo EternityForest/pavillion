@@ -43,7 +43,6 @@ extern "C"
 
 
 #ifdef ESP32
-# include
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -69,13 +68,38 @@ __attribute__((weak)) int pavillion_getBatteryStatus()
 {
   return 0;
 }
+static void pushAllAlerts(PavillionServer * p);
+static void pushAllTags(PavillionServer * p);
 
+//Anchor for the linked list of all tag points
+PavillionTagpoint * tagsList=0;
 
 static bool connected = false;
 
 //Estimate of the AP's TX power
 int pavillionApTxPower = 20;
 
+static uint32_t microsRollovers=0;
+
+static uint32_t lastMicrosCheckTime=0;
+
+uint64_t pavillionMonotonicTime()
+{
+  uint64_t x;
+
+  uint32_t z = micros();
+
+  ((uint32_t*)(&x))[0]=micros();
+  ((uint32_t*)(&x))[1]=microsRollovers;
+
+  //Detect if a rollover happened while we weren't looking.
+  if(micros()<z)
+  {
+    ((uint32_t*)(&x))[0]=micros();
+    ((uint32_t*)(&x))[1]=microsRollovers;
+  }
+  return x;
+}
 
 //Dynamically optimize the transmit power in real time
 //To maintain a -73dbm level at the reciever. This
@@ -309,12 +333,14 @@ void KnownClient::sendRawEncrypted(uint8_t opcode, uint8_t *data, uint16_t datal
   free(op);
 }
 
-void PavillionServer::broadcastMessage(const char *target, const char *name, uint8_t *data, int len)
+void PavillionServer::broadcastMessage(const char *target, const char *name, const uint8_t *data, int len)
 {
   broadcastMessage(target, name, data, len, PAV_OP_RELIABLE);
 }
 
-void PavillionServer::broadcastMessage(const char *target, const char *name, uint8_t *data, int len, char opcode)
+
+static void setTagValueByName(char * name, float v);
+void PavillionServer::broadcastMessage(const char *target, const char *name, const uint8_t *data, int len, char opcode)
 {
   dbg("Starting to broadcastMessage");
 //It is important that sendinglock be the outer lock.
@@ -565,6 +591,40 @@ void PavillionServer::onApplicationMessage(IPAddress addr, uint16_t port, uint64
     }
   }
 
+  //Handle either kind of message
+   if ((opcode == PAV_OP_RELIABLE) | (opcode == PAV_OP_UNRELIABLE))
+  {
+    char * topic = (char *)data;
+    char * name = strchr((char *)data, '\n');
+    uint8_t * payload= (uint8_t *)strchr((char *)data+1,'\n');
+    //Set separators to null terminators like they probably always should have been
+    *name = 0;
+    *payload = 0;
+    name+=1;
+    payload+=1;
+    //Hopefully the compiler can tell when tagsList is always 0 and leave this code out
+    if(tagsList)
+    {
+      //If it's a tag point message that's kind of important.
+      if(strcmp(topic,"core.tagv")==0)
+      {
+        //bytes 0-4 are the floating point value.
+        setTagValueByName(name, ((float*) payload)[0]);
+      }
+    }
+  }
+
+  if (opcode == PAV_OP_TIMESYNCREQ)
+  {
+      //send the client the connection timestamp
+      uint64_t d[3];
+      
+      d[0]=counter;
+      d[1]=pavillionMonotonicTime();
+      d[2]=0;
+      client->sendRawEncrypted(PAV_OP_TIMESYNC, (uint8_t *)(&d), 16);
+  }
+
 //This feature is only for non-rtos platforms.
 //This allows a limited degree of polling, to support reliable messages WITHIN
 //The retry loop for message sending.
@@ -684,6 +744,8 @@ void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uin
 
     clientcounter = counter;
     this->lastSeen = millis();
+    //Putting a null makes string operations safer
+    data[datalen]=0;
     this->server->onApplicationMessage(addr, port, counter, data, datalen, this);
   }
 
@@ -817,9 +879,18 @@ void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uin
 
       //Send the client accept message
       dbg("sending cl accept");
-      this->sendRawEncrypted(16, (uint8_t *)"", 30);
+      
+      //send the client the connection timestamp
+      uint64_t ts = pavillionMonotonicTime();
+
+      this->sendRawEncrypted(16, (uint8_t *)(&ts), 8);
       //No reusing the server nonce is allowed here.
       randombytes_buf(serverNonce, 32);
+      //Every reconnect, we send the state of all alerts
+      //Because they might have changed while we weren't looking.
+      pushAllAlerts(this->server);
+      pushAllTags(this->server);
+
     }
   }
 }
@@ -992,6 +1063,14 @@ void PavillionServer::poll()
     }
   }
 
+  //Hack so we can get a 64 bit count
+  if(lastMicrosCheckTime> micros())
+  {
+    microsRollovers+=1;
+  }
+  microsRollovers=micros();
+
+
   if (connected == false)
   {
     PAV_UNLOCK();
@@ -1005,7 +1084,10 @@ optimizeTXPower();
   if (x)
   {
     //Once again the extra 32 are for garbage fake libsodium's memory saving tricks
-    uint8_t *incoming = (uint8_t *)malloc(x + 32 + 1);
+    //Add one in case of math error somewhere and a buffer overflow
+    //Also add another one because we add our own null terminator before passing to
+    //The application, to protect against unsafe use ir string functions
+    uint8_t *incoming = (uint8_t *)malloc(x + 32 + 1+1);
     udp.read(incoming, 1500);
     this->onMessage(incoming, x, udp.remoteIP(), udp.remotePort());
     free(incoming);
@@ -1037,3 +1119,165 @@ void pavillionConnectWiFi(const char * ssid, const char * psk)
   PAV_UNLOCK();
 }
 
+
+PavillionAlert * alertsList=0;
+
+PavillionAlert::PavillionAlert(const char * n, PavillionServer * p)
+{
+    PAV_LOCK();
+
+  server = p;
+  name=(char *)malloc(strlen(n)+1);
+  strcpy(name, n);
+
+  if (alertsList == 0)
+  {
+    alertsList = this;
+  }
+  else
+  {
+    PavillionAlert *p = alertsList;
+
+    while (p->next)
+    {
+      p = p->next;
+    }
+    p->next = this;
+  }
+    PAV_UNLOCK();
+
+
+}
+
+void PavillionAlert::push()
+{
+  //Push the state of the alert
+  if(state==true)
+  {
+    server->broadcastMessage("core.alert",name,(uint8_t*)"\x01",1);
+  }
+  else
+  {
+    server->broadcastMessage("core.alert",name,(uint8_t*)"\x00",1);
+  }
+  
+}
+
+static void pushAllAlerts(PavillionServer * s)
+{
+   PAV_LOCK();
+
+   PavillionAlert *p = alertsList;
+
+    while (p)
+    {
+      if(s==p->server)
+      {
+        p->push();
+      }
+      p = p->next;
+    }
+    PAV_UNLOCK();
+
+}
+
+
+
+PavillionTagpoint::PavillionTagpoint(const char * n, PavillionServer * s)
+{
+  PAV_LOCK();
+  server = s;
+  name=(char *)malloc(strlen(n)+1);
+  strcpy(name, n);
+
+  if (tagsList == 0)
+  {
+    tagsList = this;
+  }
+  else
+  {
+    PavillionTagpoint *p = tagsList;
+
+    while (p->next)
+    {
+      p = p->next;
+    }
+    p->next = this;
+  }
+  PAV_UNLOCK();
+}
+
+void PavillionTagpoint::set(float v)
+{
+  timestamp = pavillionMonotonicTime();
+  uint8_t d[4+8];
+  ((float *)d)[0]= v;
+
+  ((uint64_t*)(d+4))[0]=timestamp;
+
+  server->broadcastMessage("core.tagv",name,d,12);
+}
+
+void PavillionTagpoint::setFlag(uint8_t f)
+{
+  flags=flags|f;
+}
+
+
+void PavillionTagpoint::clearFlag(uint8_t f)
+{
+  flags=flags&(~f);
+}
+
+//Push the value and configuration of the tagpoint to the server
+void PavillionTagpoint::push()
+{
+  uint8_t d[12+1+8];
+  ((float *)d)[0]=value;
+  ((float *)d)[1]=min;
+  ((float *)d)[2]=max;
+  ((float *)d)[3]=interval;
+  d[12]=flags;
+
+  ((uint64_t*)(d+13))[0]=timestamp;
+
+
+  server->broadcastMessage("core.tag",name,d,16+1+8);
+}
+
+static void pushAllTags(PavillionServer * s)
+{
+  PAV_LOCK();
+   PavillionTagpoint *p = tagsList;
+
+    while (p)
+    {
+      if(s==p->server)
+      {
+        p->push();
+      }
+      p = p->next;
+    }
+  PAV_UNLOCK();
+}
+
+static void setTagValueByName(char * name, float v)
+{
+  PAV_LOCK();
+   PavillionTagpoint *p = tagsList;
+
+    while (p)
+    {
+      if(strcmp(p->name,name)==0)
+      {
+        if(p->flags & TAG_FLAG_WRITABLE)
+        {
+            p->timestamp = pavillionMonotonicTime();
+            p->value=v;
+        }
+        break;
+      }
+      p = p->next;
+    }
+  PAV_UNLOCK();
+}

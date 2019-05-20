@@ -166,3 +166,48 @@ This only happens on the ESP8266 at the moment.
 
 `void pavillionConnectWiFi(static unsigned char * ssid, static unsigned char * psk);`
 This also handles turning off that silly persistance feature that wears out flash.
+
+### Tag Points and Alerts
+
+This library supports tagpoints and alerts, including automatically transmitting the state of them when new clients
+connect.
+
+Tag points are bidirectional, but currently the server will not rebroadcast chages from one client to another.
+
+Ther are best used for sensors, or things only one client controls.
+
+To use them:
+
+```
+PavillionServer p;
+
+//Tags and alerts just need a name and the server they belong to.
+PavillionTagpoint tagPoint("testingTagPoint",&p);
+PavillionAlert testingAlert("testingAlert", &p);
+
+void myFunction()
+{
+
+  //Set and push to server
+  tagPoint.set(98);
+
+  //Interval may be overwritten by the client, but
+  //Min and max are "part of" the tag point and can only be set
+  //By the "owner"
+  tagPoint.interval = 5;
+  tagPoint.max = 100;
+  tagPoint.min = 0
+
+  //The remote clients cannpt write to a tagpoint iif this is false.
+  tagPoint.setFlag(TAG_FLAG_WRITABLE)
+
+  testingAlert.trip();
+  testingAlert.release();
+
+  //Set but don't push to the server immediatly.
+  tagPoint.value=9;
+}
+```
+
+On the client side you will currently need to manually use the core.tag and core.tagv messages, unless you
+are using Kaithem's GUI.
