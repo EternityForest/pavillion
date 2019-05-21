@@ -32,6 +32,9 @@ class KnownClient;
 int64_t readSignedNumber(void *i, int len);
 //Sigh. Esp8266 aligned addressing crap workaround
 uint64_t readUnsignedNumber(void *i, int len);
+
+float readFloatingNumber(void *i);
+
 void writeSignedNumber(void *i, int len, int64_t val);
 void writeUnsignedNumber(void *i, int len, uint64_t val);
 extern int pavillionApTxPower;
@@ -175,8 +178,13 @@ class PavillionTagpoint
         void clearFlag(uint8_t f);
         uint8_t flags;
 
-        //When the tag's value was set
-        uint64_t timestamp=0;
+        //When the tag's value was set. Note that it could be set
+        //From an old value on a client that was set before we booted,
+        //So it has to be an int so we can resolve conflicts. 
+
+        //When clients set the value, we use the timestamp they give us,
+        //So it is the timestamp of the value itself, not when it arrived.
+        int64_t timestamp=-9223372036854775807;
 };
 
 

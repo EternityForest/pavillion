@@ -83,9 +83,9 @@ static uint32_t microsRollovers=0;
 
 static uint32_t lastMicrosCheckTime=0;
 
-uint64_t pavillionMonotonicTime()
+int64_t pavillionMonotonicTime()
 {
-  uint64_t x;
+  int64_t x;
 
   uint32_t z = micros();
 
@@ -161,6 +161,21 @@ uint64_t readUnsignedNumber(void *i, int len)
   }
   return r;
 }
+
+//Sigh. Esp8266 aligned addressing crap workaround
+float readFloatingNumber(void *i)
+{
+  union {
+    float r = 0;
+    uint8_t b[4];
+  };
+  for (int j = 0; j < 4; j++)
+  {
+    b[j] = ((uint8_t *)i)[j];
+  }
+  return r;
+}
+
 
 void writeSignedNumber(void *i, int len, int64_t val)
 {
@@ -339,7 +354,7 @@ void PavillionServer::broadcastMessage(const char *target, const char *name, con
 }
 
 
-static void setTagValueByName(char * name, float v,uint64_t timestamp);
+static void setTagValueByName(char * name, float v,int64_t timestamp);
 
 void PavillionServer::broadcastMessage(const char *target, const char *name, const uint8_t *data, int len, char opcode)
 {
@@ -606,7 +621,7 @@ void PavillionServer::onApplicationMessage(IPAddress addr, uint16_t port, uint64
   {
     char * topic = (char *)data;
     char * name = strchr((char *)data, '\n');
-    uint8_t * payload= (uint8_t *)strchr((char *)data+1,'\n');
+    uint8_t * payload= (uint8_t *)strchr((char *)name+1,'\n');
     //Set separators to null terminators like they probably always should have been
     *name = 0;
     *payload = 0;
@@ -621,7 +636,7 @@ void PavillionServer::onApplicationMessage(IPAddress addr, uint16_t port, uint64
         //bytes 0-3 are the floating point value. 4-7 are the timestamp
         //We save the timestamp from the client, because it represents the real time at which
         //The measurememt or command happened.
-        setTagValueByName(name, ((float*) payload)[0], ((uint64_t*)payload+4)[0]);
+        setTagValueByName(name, readFloatingNumber(payload), readSignedNumber(payload+4,8));
       }
     }
   }
@@ -897,7 +912,7 @@ void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uin
       dbg("sending cl accept");
       
       //send the client the connection timestamp
-      uint64_t ts = pavillionMonotonicTime();
+      int64_t ts = pavillionMonotonicTime();
 
       WiFi.setOutputPower(20);
       
@@ -907,7 +922,7 @@ void KnownClient::onMessage(uint8_t *data, uint16_t datalen, IPAddress addr, uin
         //If tag points are in use, this gets to be more important
         //So we send it twice to increase the chances we have a good time sync
         //before the first tag data arrives at the client.
-        uint64_t ts = pavillionMonotonicTime();
+        int64_t ts = pavillionMonotonicTime();
         this->sendRawEncrypted(16, (uint8_t *)(&ts), 8);
         //This should mostly ensure the message gets there before the tag data.
         //It's not exactly a big deal if it isn't, the client should be
@@ -1225,6 +1240,8 @@ PavillionTagpoint::PavillionTagpoint(const char * n, PavillionServer * s)
   min=-1000000000;
   max=1000000000;
   name=(char *)malloc(strlen(n)+1);
+
+  timestamp= -9223372036854775800;
   strcpy(name, n);
 
   if (tagsList == 0)
@@ -1250,7 +1267,7 @@ void PavillionTagpoint::set(float v)
   uint8_t d[4+8];
   ((float *)d)[0]= v;
 
-  ((uint64_t*)(d+4))[0]=timestamp;
+  ((int64_t*)(d+4))[0]=timestamp;
 
   server->broadcastMessage("core.tagv",name,d,12);
 }
@@ -1276,7 +1293,7 @@ void PavillionTagpoint::push()
   ((float *)d)[3]=interval;
   d[16]=flags;
 
-  ((uint64_t*)(d+17))[0]=timestamp;
+  ((int64_t*)(d+17))[0]=timestamp;
 
 
   server->broadcastMessage("core.tag",name,d,16+1+8);
@@ -1298,19 +1315,28 @@ static void pushAllTags(PavillionServer * s)
   PAV_UNLOCK();
 }
 
-static void setTagValueByName(char * name, float v,uint64_t timestamp)
+static void setTagValueByName(char * name, float v,int64_t timestamp)
 {
   PAV_LOCK();
    PavillionTagpoint *p = tagsList;
-
     while (p)
     {
       if(strcmp(p->name,name)==0)
       {
         if(p->flags & TAG_FLAG_WRITABLE)
         {
-            p->timestamp =timestamp;
-            p->value=v;
+            //Reject old timestamps
+            if(timestamp>p->timestamp)
+            {
+              //Also reject anything more than a minute in the future
+              if(timestamp < (pavillionMonotonicTime()+ 60000000L))
+              {
+                //Don't call set, that would trigger a send
+                p->timestamp =timestamp;
+                p->value=v;
+              }
+            
+            }
         }
         break;
       }

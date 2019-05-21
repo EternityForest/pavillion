@@ -211,3 +211,18 @@ void myFunction()
 
 On the client side you will currently need to manually use the core.tag and core.tagv messages, unless you
 are using Kaithem's GUI.
+
+
+### MDNS
+
+If you use MDNS and get a reboot loop, try including things in exactly this order:
+```
+
+#include "pavillion.h"
+ #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
+#include <WiFiClient.h>
+
+```
+
+And no, I have no clue what's going on there or what's hiding in that MDNS lib.
