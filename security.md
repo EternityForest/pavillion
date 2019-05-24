@@ -156,10 +156,20 @@ This proves that any recieved packet is newer than the client's challenge which 
 A server sends this message with no payload after the opcode to indicate that the client should make a Nonce Request.
 
 ### New Server Join (Opcode 5)
-This message is sent to a multicast address when a server starts listening to it. Clients should send a Nonce Request to the server if they want to send multicast.
+This message is sent to a multicast address when a server starts listening to it. Clients should send a Nonce Request to the server if they want to send multicast. It does not contain payload data.
 
-Multicast transmitters should listen to their multicast group, ignoring their own messages, but otherwise processing
-New Server Join or Unrecognized Client messages.
+Multicast transmitters should listen to their multicast group, ignoring their own messages, but otherwise processing New Server Join or Unrecognized Client messages.
+
+
+For a non-multicast server that only listens on its own unicast address, the announcement should instead
+be sent to IPv4 address 224.0.0.251 or IPv6 address ff02::fb and port 2221.
+
+Clients and servers listing on port 2221 must use the address reuse flag to allow other clients on the same machine.
+
+Non-multicast clients recieving this message should ignore unless it is from an IP:Port they already know to be
+a connected client,  This allows fast reconnect when servers reboot but keep the same address.
+
+
 
 
 ### Invalid Client ID(opcode 6)

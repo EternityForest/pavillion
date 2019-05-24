@@ -3,9 +3,10 @@
 
 Pavillion is a UDP based protocol that provides reliable multicast messaging and RPC calls. 
 
-By default, Port 1783 should be used general application traffic, and 2221 should be used for low data rate system status messages.
+By default, Port 1783 should be used general application traffic, and 2221 should be used for low data rate system status messages. Port 2221 should only be used in multicast mode with the reuseaddr flag set.
 
-For multicasting, general application traffic by default should use 239.255.28.12 and low rate system messages should use 239.255.28.18
+
+For multicasting, general application traffic by default should use 239.255.28.12 and low rate system messages should use 239.255.28.18.
 
 Chat messages between humans should use an application-specific port.
 

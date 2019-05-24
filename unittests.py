@@ -137,6 +137,7 @@ if __name__ == '__main__':
                 s_pub, s_pk = libnacl.crypto_box_keypair()
                 
                 cid2 = b'cid2'*4
+                gc.collect()
 
                 #Servers identify clients by client id and key pairs.
                 s = Server(pubkeys={cid2:c_pub}, ecc_keypair=(s_pub,s_pk))                
@@ -369,13 +370,14 @@ if __name__ == '__main__':
 
                 group = "224.1.0.39"
                 
+                ##This unit test has a problem. I think it's because the server is created after the client.
                 c = Client(psk=psk, clientID=cid1,address=(group,1783))
-                time.sleep(0.5)
+                time.sleep(1)
 
                 #Servers identify clients by client id and key pairs.
                 s = Server(keys={cid1:psk},multicast=group)
                 s2 = Server(keys={cid1:psk},multicast=group)
-                time.sleep(0.3)
+                time.sleep(1)
 
 
 
