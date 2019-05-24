@@ -240,7 +240,7 @@ static void pav_WiFiEvent(WiFiEvent_t event)
 static WiFiEventHandler stationConnectedHandler;
 static WiFiEventHandler stationDisconnectedHandler;
 
-static void pav_onconnect(const WiFiEventStationModeConnected &evt)
+static void pav_onconnect(const WiFiEventStationModeGotIP &evt)
 {
   dbg(F("WiFi Connected"));
   connected = true;
@@ -305,7 +305,7 @@ static char setThingsUp()
 #ifdef ESP32
   WiFi.onEvent(pav_WiFiEvent);
 #else
-  stationConnectedHandler = WiFi.onStationModeConnected(&pav_onconnect);
+  stationConnectedHandler = WiFi.onStationModeGotIP(&pav_onconnect);
   stationDisconnectedHandler = WiFi.onStationModeDisconnected(&pav_ondisconnect);
 #endif
 }
