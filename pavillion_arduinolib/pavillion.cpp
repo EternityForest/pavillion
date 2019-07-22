@@ -1242,6 +1242,20 @@ PavillionAlert::PavillionAlert(const char * n, PavillionServer * p)
 
 }
 
+
+void PavillionAlert::trip()
+{
+  state=true;
+  push();
+}
+
+
+void PavillionAlert::release()
+{
+  state=true;
+  push();
+}
+
 void PavillionAlert::push()
 {
   //Push the state of the alert

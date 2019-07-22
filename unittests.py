@@ -5,10 +5,61 @@ import gc
 #Make it able to exit faster?
 pavillion.daemon = True
 
+virtualHairpin=True
 import time
 import libnacl
 if __name__ == '__main__':
     import unittest
+
+
+    if virtualHairpin:
+
+
+        class TestVHairpin(unittest.TestCase):
+            """Test the case where you attempt to access a server on the LAN using it's WAN address.
+               This will always fail without UPnP.
+            """
+            pass
+
+            def test_rpc(self):
+                c_pub, c_pk = libnacl.crypto_box_keypair()
+
+                s_pub, s_pk = libnacl.crypto_box_keypair()
+                
+                cid2 = b'cid2'*4
+
+                #Servers identify clients by client id and key pairs.
+                s = Server(pubkeys={cid2:c_pub}, ecc_keypair=(s_pub,s_pk), openWANPort=6070)
+
+                #Get one of our WAN addressess, and from there 
+                import pavillion.upnpwrapper
+                wan_addr = pavillion.upnpwrapper.getWANAddresses()[0]
+
+                c = Client(address=(wan_addr, 6070),keypair=(c_pub,c_pk), serverkey=s_pub, clientID=cid2,cipher=2)
+
+                time.sleep(0.55)
+                r= Register("test","foooo")
+
+                s.registers[400] =r
+
+                #Using the "Direct function" method which doesn't have as much introspection capability
+                s.registers[401] =lambda c,a: a
+
+                x = c.call(400, b'A test string')
+
+                self.assertEqual(x, b'A test string')
+
+                x = c.call(401, b'A test string')
+
+                self.assertEqual(x, b'A test string')
+
+
+
+
+
+
+
+
 
 
     class TestRPC(unittest.TestCase):
@@ -369,8 +420,8 @@ if __name__ == '__main__':
                 cid1 = b'cid1'*4
 
                 group = "224.1.0.39"
-                
-                ##This unit test has a problem. I think it's because the server is created after the client.
+
+                #Note that we create client before server and it should still work                
                 c = Client(psk=psk, clientID=cid1,address=(group,1783))
                 time.sleep(1)
 
