@@ -68,9 +68,7 @@ When a client wants to send a message to a server, it first sends a Nonce Reques
 a message with counter 0 followed by a single 1 byte as the opcode, then the client's 1 byte cipher number, then the client's 16 byte Client ID, then a 16 byte challenge. Servers recieving this should reply with a PSK Nonce if the cipher number specifies PSK encryption,
 or with an ECC Nonce otherwise.
 
-The client pubkey is optional and used to allow "guests" not previously known by the system to connect. In this case, the library should
-report a client ID derived from the first 16 bytes of the blake2b hash of the client's pubkey to the application layer, and the
-actual client ID sent should be ignored. If not used it should be all zeros.
+When using PSK ciphers, The client pubkey is optional and used to allow "guests" not previously known by the system to connect. In this case, the library should report a client ID derived from the first 16 bytes of the blake2b hash of the client's pubkey to the application layer, and the actual client ID sent should be ignored. If not used it should be all zeros.
 
 Because of multicasting, a client should accept multiple responses to a challenge, but should only accept one particular response once.
 This will involve recording each the nonce or hash for each response and clearing the list when you generate a new challenge.
@@ -90,7 +88,7 @@ If this is not set up, any manner of random garbage data may be used.
 
 It should be all zeros or random if there is no active session to check.
 
-`CipherNumber[1], ,ClientID[16],ClientChallenge[16] sessionID[16] ClientPubkey[32]]`
+`CipherNumber[1],ClientID[16],ClientChallenge[16] sessionID[16] [ClientPubkey[32]]`
 
 ### PSK Nonce(S>C, Opcode 2)
 
@@ -171,7 +169,6 @@ a connected client,  This allows fast reconnect when servers reboot but keep the
 
 
 
-
 ### Invalid Client ID(opcode 6)
 
 This message should be sent with the client's ClientChallenge as the payload
@@ -199,6 +196,8 @@ After a certain number of failures, exponential backoff should be used.
 An ECC Nonce message serves the role of a standard nonce message, but contains only the 32 byte server nonce followed by the 16 byte
 client challenge. The entire data contents are encrypted using the client selected cipher's specified asymetric encryption. Because the counter is 0,
 a random 24 byte nonce is selected and prepended to the encrypted data.
+
+`Nonce[24] encrypt(ServerNonce[32]+ClientChallenge[16])`
 
 ### 12: ECC Client Info (C>S)
 Upon receiving a Nonce message with a correct challenge, a client wishing to use ECC  must send an ECC client info message with opcode 12 instead of a standard client info message.
@@ -231,7 +230,7 @@ Same as libnacl, but specifies that ECC key setup should be used
 
 ## Discovery
 
-Automatic Discovery of devices should use multicast DNS. 
+Automatic Discovery of devices should generally use multicast DNS, which is out of the scope of Pavillion itself/
 
 Public key based servers supporting discovery should advertise themselves under <hex digest of blake2b hash of public key>.local
 

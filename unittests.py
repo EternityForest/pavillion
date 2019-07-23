@@ -92,7 +92,7 @@ if __name__ == '__main__':
 
             self.assertEqual(x, b'A test string')
 
-        def guest_rpc(self):
+        def test_guest_rpc(self):
             s_pub, s_pk = libnacl.crypto_box_keypair()
             
             cid2 = b'cid2'*4
