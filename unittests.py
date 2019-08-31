@@ -37,7 +37,7 @@ if __name__ == '__main__':
 
                 c = Client(address=(wan_addr, 6070),keypair=(c_pub,c_pk), serverkey=s_pub, clientID=cid2,cipher=2)
 
-                time.sleep(0.55)
+                time.sleep(5)
                 r= Register("test","foooo")
 
                 s.registers[400] =r
@@ -253,7 +253,9 @@ if __name__ == '__main__':
                     incoming.append((name,data,client))
 
                 m = s.messageTarget('TestTarget',z)
-
+                #TODO this represents a connectivity problem here.
+                #We should not need this delay. Ever.
+                time.sleep(3)
                 c.sendMessage("TestTarget","MessageName",b'data')
 
                 

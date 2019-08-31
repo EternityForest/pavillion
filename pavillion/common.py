@@ -1,22 +1,32 @@
+# Copyright (c) 2019 Daniel Dunn
 
-#Copyright Daniel Dunn 2018
-#This file is part of 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
 
-#Pavillion is free software: you can redistribute it and/or modify
-#it under the terms of the GNU General Public License as published by
-#the Free Software Foundation, version 3.
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
 
-#Pavillion is distributed in the hope that it will be useful,
-#but WITHOUT ANY WARRANTY; without even the implied warranty of
-#MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#GNU General Public License for more details.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 
-#You should have received a copy of the GNU General Public License
-#along with Pavillion.  If not, see <http://www.gnu.org/licenses/>.
 
+import hashlib,logging,struct,threading,atexit,base64,queue,time,subprocess,re,os,socket
 
-import hashlib,logging,struct,threading,atexit,base64,queue,time,subprocess,re,os
+def addMulticastGroup(s,address):
+    group = socket.inet_aton(address)
+    mreq = struct.pack('4sL', group, socket.INADDR_ANY)
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
+    
 DEFAULT_PORT=1783
 DEFAULT_MCAST_ADDR="239.255.28.12"
 

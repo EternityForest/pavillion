@@ -1,17 +1,22 @@
-#Copyright Daniel Dunn 2018
-#This file is part of 
+# Copyright (c) 2019 Daniel Dunn
 
-#Pavillion is free software: you can redistribute it and/or modify
-#it under the terms of the GNU General Public License as published by
-#the Free Software Foundation, version 3.
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
 
-#Pavillion is distributed in the hope that it will be useful,
-#but WITHOUT ANY WARRANTY; without even the implied warranty of
-#MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#GNU General Public License for more details.
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
 
-#You should have received a copy of the GNU General Public License
-#along with Pavillion.  If not, see <http://www.gnu.org/licenses/>.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 
 import weakref, types, collections, struct, time, socket,threading,random,os,logging,traceback,select
 
@@ -366,11 +371,16 @@ class _Server():
 
         self.mcastgroup = multicast
         #Subscribe to any requested mcast group
+        self.msock_joined = False
         if multicast:
-            group = socket.inet_aton(multicast)
-            mreq = struct.pack('4sL', group, socket.INADDR_ANY)
-            self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-
+            try:
+                common.addMulticastGroup(self.sock, multicast)
+                self.msock_joined = True
+            except OSError as e:
+                if e.errno==19:
+                    pass
+                else:
+                    raise
         #A list of all the registers and functions indexed by number
         self.registers = {}
 
@@ -667,13 +677,28 @@ class _Server():
         else:
             a = ("224.0.0.251",2221)
         m = struct.pack("<Q",0)+struct.pack("<B",5)+b''
-        self.sendsock.sendto(b"PavillionS0"+m,a)
-        time.sleep(0.003)
-        self.sendsock.sendto(b"PavillionS0"+m,a)
-        time.sleep(0.025)
-        self.sendsock.sendto(b"PavillionS0"+m,a)
-
+        try:
+            self.sendsock.sendto(b"PavillionS0"+m,a)
+            time.sleep(0.003)
+            self.sendsock.sendto(b"PavillionS0"+m,a)
+            time.sleep(0.025)
+            self.sendsock.sendto(b"PavillionS0"+m,a)
+        except OSError as e:
+            if e.errno == 101:
+                pass
+            else:
+                pavillion_logger.exception("Err in initial send")
         while(self.running):
+            
+            if not self.msock_joined and self.mcastgroup:
+                try:
+                    common.addMulticastGroup(self.sock, self.mcastgroup)
+                    self.msock_joined = True
+                except OSError as e:
+                    if e.errno==19:
+                        pass
+                    else:
+                        raise
             try:
                 r,w,x= select.select([self.sock,self.sendsock],[],[],5)
             except:
