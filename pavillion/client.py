@@ -922,7 +922,10 @@ class _Client():
         #Just a convenient place to put this so it's out of the way.
         #It can use discoverAddress, so we don't want to do it synchronously
         #In startup.
-        self.initialConnection()
+        try:
+            self.initialConnection()
+        except OSError:
+            pavillion_logger.exception("Error trying to find device, retrying later")
 
         while self.running:
             s = time.time()
@@ -1187,8 +1190,11 @@ class _Client():
         #Here's where unreachable network can happen.    
         try:
             self.send(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data,addr=addr,force_multicast=force_multicast_first)
-        except:
-            logging.exception("Error in send")
+        except OSError as e:
+            #This can be auto retried, so I'm really not sure we need
+            #To do anything here. 
+            if e.errno == 101:
+                pass#logging.exception("Error in send")
 
         #Resend loop
         if reliable:
@@ -1205,8 +1211,6 @@ class _Client():
                 try:
                     self.send(counter, 1 if reliable else 3, target.encode('utf-8')+b"\n"+name.encode('utf-8')+b"\n"+data)
                 except OSError:
-                    #This is not that important to log I don't think
-                    print(traceback.format_exc())
                     pass
                 except:
                     logging.exception("Error in send")
